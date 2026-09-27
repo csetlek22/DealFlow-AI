@@ -2,6 +2,9 @@ import streamlit as st
 import time
 # Bir önceki adımda yazdığımız orchestrator dosyasından gerekli fonksiyonları çekiyoruz
 from orchestrator import app, AgentState 
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 # --- 1. Arayüz Renk ve Tasarım Ayarları (Beyaz & Mor Tema) ---
 st.set_page_config(
@@ -72,6 +75,13 @@ st.markdown("""
         font-family: 'Courier New', monospace;
         color: #2B2B2B;
     }
+    
+    /* Metin Editörü (Text Area) için Mor/Beyaz zorlaması */
+    div[data-baseweb="textarea"] > div, div[data-baseweb="textarea"] textarea {
+        background-color: #6A1B9A !important;
+        color: #FFFFFF !important;
+        -webkit-text-fill-color: #FFFFFF !important;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -101,7 +111,12 @@ with col2:
             st.session_state.target_company = target_company
             
             # LangGraph'a ilk girdiyi (initial state) veriyoruz
-            initial_state = {"target_company": target_company}
+            initial_state = {
+                "target_company": target_company,
+                "draft_email": None,   # ÖNCEKİ MAİLİ SIFIRLA
+                "analysis": None,      # ÖNCEKİ ANALİZİ SIFIRLA
+                "human_feedback": None
+            }
             config = {"configurable": {"thread_id": st.session_state.thread_id}}
             
             # Başlat!
@@ -126,63 +141,126 @@ if st.session_state.running:
     if "Human_Approval" in current_state_info.next:
         st.subheader("⚠️ Onay Bekleniyor (Human-in-the-Loop)")
         
-        # Ajanların bulduğu verileri şık bir 'Kart' içinde gösteriyoruz
         if state.get("analysis"):
             st.markdown(f"""
             <div class='lead-card'>
-                <h3 style='color: #6A1B9A;'>🏢 {state['analysis']['company_name']}</h3>
-                <p><b>🏆 Fit Skoru:</b> {state['analysis']['fit_score']}/10</p>
-                <p><b>📡 Kategori:</b> {state['analysis']['signal_category']}</p>
-                <p><b>🔍 Tespit (Signal):</b> {state['analysis']['signal']}</p>
-                <p><b>🧠 Gerekçe:</b> {state['analysis']['rationale']}</p>
-                <hr>
-                <p><b>📝 Hazırlanan Cold Email Taslağı:</b></p>
-                <pre>{state['draft_email']['body']}</pre>
+                <h3 style='color: #6A1B9A;'>🏢 {state['analysis'].get('company_name', 'Bilinmiyor')}</h3>
+                <p><b>🏆 Fit Skoru:</b> {state['analysis'].get('fit_score', 0)}/10</p>
+                <p><b>📡 Kategori:</b> {state['analysis'].get('signal_category', 'Belirtilmedi')}</p>
+                <p><b>🔍 Tespit (Signal):</b> {state['analysis'].get('signal', 'Bulunamadı')}</p>
+                <p><b>🧠 Gerekçe:</b> {state['analysis'].get('rationale', 'Belirtilmedi')}</p>
             </div>
             """, unsafe_allow_html=True)
         
         st.write("")
-        st.write("Ajanlar taslağı hazırladı. Notion CRM'e kaydetmeden önce onayınızı veya yönlendirmenizi bekliyor.")
+        st.write("📝 **Cold Email Taslağı (Düzenleyebilirsin):**")
         
-        # Kullanıcının Geri Bildirim veya Onay vereceği kontroller
-        feedback = st.text_input("Geri Bildiriminiz (Opsiyonel):", placeholder="Örn: Mail çok uzun, daha samimi yap.")
+        # Maili DÜZENLENEBİLİR bir text area içine koyuyoruz
+        edited_email_body = st.text_area(
+            "Mail İçeriği", 
+            value=state.get('draft_email', {}).get('body', ''), 
+            height=200,
+            label_visibility="collapsed"
+        )
         
-        col_btn1, col_btn2 = st.columns(2)
+        
+        # YENİ EKLENEN KISIM: Ajanın ürettiği Konu ve Tahmini E-posta adresi
+        col_email1, col_email2 = st.columns(2)
+        with col_email1:
+            st.write("🎯 **Alıcı E-posta (Ajanın Tespiti/Tahmini):**")
+            target_email = st.text_input(
+                "Alıcı", 
+                value=state.get('analysis', {}).get('contact_email', 'info@sirket.com'),
+                label_visibility="collapsed"
+            )
+        with col_email2:
+            st.write("📌 **E-posta Konusu (Ajanın Önerisi):**")
+            email_subject = st.text_input(
+                "Konu", 
+                value=state.get('draft_email', {}).get('subject', 'Tanışma'),
+                label_visibility="collapsed"
+            )
+
+        
+        st.write("🤖 **Ajan için Geri Bildirim (Opsiyonel):**")
+        feedback = st.text_input("Geri Bildirim:", placeholder="Örn: Mail çok uzun, daha samimi yap.", label_visibility="collapsed")
+        
+        # 3 AYRI BUTON
+        col_btn1, col_btn2, col_btn3 = st.columns(3)
+        
         with col_btn1:
-            if st.button("✅ Onayla ve Notion'a Kaydet", use_container_width=True):
-                # Hiçbir feedback vermeden, sadece mevcut durumu güncelleyip grafı devam ettiriyoruz.
-                app.update_state(config, {"human_feedback": None}, as_node="Human_Approval")
-                
+            if st.button("💾 Sadece Notion'a Kaydet", use_container_width=True):
+                updated_draft = {
+                    "subject": email_subject,
+                    "body": edited_email_body
+                }
+
+                app.update_state(
+                    config,
+                    {
+                        "draft_email": updated_draft,
+                        "human_feedback": None
+                    },
+                    as_node="Human_Approval"
+                )
+
                 with st.spinner("Notion'a kaydediliyor..."):
-                    # Kalan düğümleri (CRM_Updater) çalıştır
                     for output in app.stream(None, config):
-                         pass
+                        pass
+
                 st.session_state.running = False
-                st.success("İşlem tamamlandı! Lead başarıyla Notion CRM'e kaydedildi.")
-                st.balloons()
+                st.rerun()
                 
         with col_btn2:
-            if st.button("🔄 Geri Bildirimle Yeniden Yazdır", use_container_width=True):
-                if feedback:
-                    # state içine feedback'i koyuyoruz ki Copywriter okuyabilsin.
-                    # as_node="Human_Approval" kısmı önemli: "Bu veriyi Human_Approval düğümünden gelmiş gibi State'e yaz" demek.
-                    app.update_state(config, {"human_feedback": feedback}, as_node="Human_Approval")
+            if st.button("📧 Kaydet ve Mail Gönder", use_container_width=True):
+                # Ajanın ürettiği (veya senin UI'da düzelttiğin) Konu ve Gövdeyi State'e kaydediyoruz
+                updated_draft = {"subject": email_subject, "body": edited_email_body}
+                app.update_state(config, {"draft_email": updated_draft, "human_feedback": None}, as_node="Human_Approval")
+                
+                with st.spinner("Notion'a kaydediliyor ve Mail gönderiliyor..."):
+                    for output in app.stream(None, config): pass
                     
+                    try:
+                        # GMAIL BİLGİLERİNİ GİR
+                        sender_email = "canersetlek68@gmail.com" 
+                        sender_password = "bahjgkhnioyowrzx" 
+                        
+                        # SABİT YAZMIYORUZ! Yukarıdaki Text Input'tan (Ajanın bulduğu veya senin yazdığın) maili alıyoruz
+                        receiver_email = target_email 
+                        
+                        msg = MIMEMultipart()
+                        msg['From'] = sender_email
+                        msg['To'] = receiver_email
+                        msg['Subject'] = email_subject # AJANIN ÜRETTİĞİ KONU!
+                        msg.attach(MIMEText(edited_email_body, 'plain'))
+                        
+                        server = smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=5)
+                        server.login(sender_email, sender_password)
+                        server.send_message(msg)
+                        server.quit()
+                        st.success(f"✅ Mail Başarıyla {receiver_email} adresine Gönderildi!")
+                        
+                        st.session_state.running = False
+                        time.sleep(2.5) 
+                        st.rerun() 
+                        
+                    except Exception as e:
+                        st.error(f"❌ Mail gönderimi başarısız: {e}")
+                        st.stop()
+                
+        with col_btn3:
+            if st.button("🔄 Yeniden Yazdır", use_container_width=True):
+                if feedback:
+                    app.update_state(config, {"human_feedback": feedback}, as_node="Human_Approval")
                     with st.spinner("Ajan geri bildiriminize göre yeniden çalışıyor..."):
-                         # None diyerek grafın kaldığı yerden devam etmesini söylüyoruz.
-                         # Ancak burada bir trik var: Yönlendirme (Routing) mantığımızı orchestrator'da 
-                         # biraz güncelleyip, feedback varsa geri dönmesini sağlamalıyız (bunu aşağıda açıklayacağım).
-                         for output in app.stream(None, config):
-                             pass
+                         for output in app.stream(None, config): pass
                     st.rerun()
                 else:
                     st.warning("Lütfen bir geri bildirim metni giriniz.")
 
-    # Eğer graf tamamen bitmişse (next boşsa) ve bekleyen işlem yoksa
     elif len(current_state_info.next) == 0 and state.get("final_status") == "Saved to CRM":
-         st.success("Tüm ajan işlemleri tamamlandı ve sistem CRM'e kaydetti.")
+         st.success("✅ Tüm işlemler tamamlandı ve CRM'e kaydedildi.")
          if st.button("Yeni Bir Lead Araştır"):
-             # State'i temizlemek için thread_id'yi değiştiriyoruz
              st.session_state.thread_id = f"thread_{int(time.time())}"
              st.session_state.running = False
              st.rerun()

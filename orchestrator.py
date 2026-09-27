@@ -28,6 +28,7 @@ llm = ChatGoogleGenerativeAI(
 # Bu kısım çok önemlidir. Ajanın JSON üretmesini garanti altına alır.
 class LeadAnalysis(BaseModel):
     company_name: str = Field(description="Araştırılan şirketin tam adı")
+    contact_email: str = Field(description="Şirketin iletişim e-posta adresi (İnternette bulunamazsa info@sirket.com veya ik@sirket.com şeklinde tahmin et)")
     fit_score: int = Field(description="İdeal müşteri profiline uyum skoru (1-10 arası)")
     signal: str = Field(description="Tespit edilen acı noktası veya büyüme sinyali (Örn: Yeni iş ilanı, yatırım, büyüme)")
     rationale: str = Field(description="Bu skorun neden verildiğini açıklayan kısa, 1 cümlelik gerekçe (Tell me why)")
@@ -60,7 +61,7 @@ def researcher_node(state: AgentState) -> dict:
     """DDGS ile şirketi araştırır. Hata durumunda sistemi çökertmez."""
     company = state['target_company']
     print(f"🕵️ Araştırmacı Ajan: {company} için veri topluyor...")
-    query = f"{company} company news recent developments hiring"
+    query = f"{company} company news recent developments hiring contact email address"
     
     try:
         results = DDGS().text(query, max_results=5)
@@ -129,30 +130,192 @@ def copywriter_node(state: AgentState) -> dict:
 
 
 def crm_node(state: AgentState) -> dict:
-    """Onaylanan veriyi Notion API üzerinden CRM'e yazar."""
+    """Onaylanan veriyi CRM'e yazar.
+    Database hücresine kısa email preview,
+    Notion sayfasının içine ise tam email taslağını ekler.
+    """
     print("💾 CRM Ajanı: Notion veritabanına kaydediliyor...")
     notion = Client(auth=NOTION_TOKEN)
-    
-    # Eksik veri kontrolü (Koruma katmanı)
-    if not state.get('analysis'):
-         return {"final_status": "Failed: No analysis data"}
+
+    if not state.get("analysis"):
+        return {"final_status": "Failed"}
 
     try:
-        new_page = {
-            "Company": {"title": [{"text": {"content": state['analysis']['company_name']}}]},
-            "Fit Score": {"number": state['analysis']['fit_score']},
-            "Signal": {"rich_text": [{"text": {"content": state['analysis']['signal']}}]},
-            "Rationale": {"rich_text": [{"text": {"content": state['analysis']['rationale']}}]},
-            "Status": {"select": {"name": "CRM'e Eklendi"}},
-            "Draft Email": {"rich_text": [{"text": {"content": state.get('draft_email', {}).get('body', '')}}]}
+        analysis = state["analysis"]
+
+        # ---------------------------------------------------------
+        # Email bilgileri
+        # ---------------------------------------------------------
+        draft_email = state.get("draft_email") or {}
+
+        draft_body = draft_email.get("body", "")
+        draft_subject = draft_email.get("subject", "")
+
+        # ---------------------------------------------------------
+        # 1. Database'de gösterilecek kısa preview
+        # ---------------------------------------------------------
+        preview_length = 120
+
+        if draft_body:
+            draft_preview = draft_body[:preview_length].strip()
+
+            if len(draft_body) > preview_length:
+                draft_preview += "..."
+        else:
+            draft_preview = ""
+
+        # ---------------------------------------------------------
+        # 2. Database properties
+        # ---------------------------------------------------------
+        new_page_props = {
+            "Company": {
+                "title": [
+                    {
+                        "text": {
+                            "content": analysis.get(
+                                "company_name",
+                                "Bilinmiyor"
+                            )
+                        }
+                    }
+                ]
+            },
+
+            "Fit Score": {
+                "number": int(
+                    analysis.get("fit_score", 0)
+                )
+            },
+
+            "Signal": {
+                "rich_text": [
+                    {
+                        "text": {
+                            "content": analysis.get(
+                                "signal",
+                                ""
+                            )[:2000]
+                        }
+                    }
+                ]
+            },
+
+            "Rationale": {
+                "rich_text": [
+                    {
+                        "text": {
+                            "content": analysis.get(
+                                "rationale",
+                                ""
+                            )[:2000]
+                        }
+                    }
+                ]
+            },
+
+            "Status": {
+                "select": {
+                    "name": "CRM'e Eklendi"
+                }
+            }
         }
-        notion.pages.create(parent={"database_id": NOTION_DATABASE_ID}, properties=new_page)
+
+        # Database hücresine sadece kısa preview
+        if draft_preview:
+            new_page_props["Draft Email"] = {"rich_text": [{"text": {"content": draft_preview}}]}
+
+        # ---------------------------------------------------------
+        # 3. Notion Database'e page oluştur
+        # ---------------------------------------------------------
+        response = notion.pages.create(parent={"database_id": NOTION_DATABASE_ID},properties=new_page_props)
+
+        page_id = response["id"]
+
+        # ---------------------------------------------------------
+        # 4. Sayfanın içine TAM email'i ekle
+        # ---------------------------------------------------------
+
+        if draft_body:
+
+            email_blocks = []
+
+            # Başlık
+            email_blocks.append({
+                "object": "block",
+                "type": "heading_2",
+                "heading_2": {
+                    "rich_text": [{
+                            "type": "text",
+                            "text": {
+                                "content": "📧 Draft Email"
+                            }}]}})
+
+            # Subject
+            if draft_subject:
+                email_blocks.append({
+                    "object": "block",
+                    "type": "paragraph",
+                    "paragraph": {
+                        "rich_text": [{
+                                "type": "text",
+                                "text": {
+                                    "content": f"Subject: {draft_subject}"
+                                }}]}})
+
+            # Ayırıcı
+            email_blocks.append({
+                "object": "block",
+                "type": "divider",
+                "divider": {}
+            })
+
+            # -----------------------------------------------------
+            # Email body'yi 2000 karakterlik parçalara böl
+            # -----------------------------------------------------
+
+            chunk_size = 1900
+
+            for i in range(0, len(draft_body), chunk_size):
+
+                chunk = draft_body[i:i + chunk_size]
+
+                email_blocks.append({
+                    "object": "block",
+                    "type": "paragraph",
+                    "paragraph": {
+                        "rich_text": [
+                            {
+                                "type": "text",
+                                "text": {
+                                    "content": chunk
+                                }
+                            }
+                        ]
+                    }
+                })
+
+            # -----------------------------------------------------
+            # Notion'a body block'larını ekle
+            # -----------------------------------------------------
+
+            notion.blocks.children.append(
+                block_id=page_id,
+                children=email_blocks
+            )
+
         print("✅ Notion'a başarıyla kaydedildi!")
-        return {"final_status": "Saved to CRM"}
-    
+        print(f"📄 Page ID: {page_id}")
+
+        return {
+            "final_status": "Saved to CRM"
+        }
+
     except Exception as e:
         print(f"❌ Notion Hatası: {e}")
-        return {"final_status": f"Error saving to CRM: {str(e)}"}
+
+        return {
+            "final_status": f"Error saving to CRM: {str(e)}"
+        }
 
 # --- 6. Routing (Yönlendirme) Mantığı ---
 
