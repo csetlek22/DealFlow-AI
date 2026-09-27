@@ -151,7 +151,18 @@ if st.session_state.running:
                 <p><b>🧠 Gerekçe:</b> {state['analysis'].get('rationale', 'Belirtilmedi')}</p>
             </div>
             """, unsafe_allow_html=True)
-        
+            
+            # YENİ: Şeffaflık ve Kontrol Katmanı (Denetim İzi)
+            with st.expander("🔍 Ajanın Araştırma Kaynakları ve Ham Verisi (Tıkla ve İncele)"):
+                st.write("**Ajanın Ziyaret Ettiği Siteler:**")
+                if state.get('source_urls'):
+                    for url in state['source_urls']:
+                        st.markdown(f"- [{url}]({url})")
+                else:
+                    st.write("Kaynak link bulunamadı.")
+                    
+                st.write("**Ajanın Okuduğu Ham Veri:**")
+                st.info(state.get('research_data', 'Veri yok.'))
         st.write("")
         st.write("📝 **Cold Email Taslağı (Düzenleyebilirsin):**")
         

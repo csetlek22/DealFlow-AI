@@ -42,6 +42,7 @@ class EmailDraft(BaseModel):
 class AgentState(TypedDict):
     target_company: str           # Kullanıcının girdiği şirket adı
     research_data: str            # İnternetten çekilen ham veri
+    source_urls: List[str]
     analysis: Optional[dict]      # LeadAnalysis (Pydantic) modelinin dict hali
     draft_email: Optional[dict]   # EmailDraft (Pydantic) modelinin dict hali
     human_feedback: Optional[str] # İnsanın onay ekranında verdiği feedback (Reddedilirse)
@@ -61,25 +62,35 @@ def researcher_node(state: AgentState) -> dict:
     """DDGS ile şirketi araştırır. Hata durumunda sistemi çökertmez."""
     company = state['target_company']
     print(f"🕵️ Araştırmacı Ajan: {company} için veri topluyor...")
-    query = f"{company} company news recent developments hiring contact email address"
+    
+    # Saf arama niyetini koruyoruz
+    query = f"{company} company news recent developments hiring"
+    
+    urls = []
+    research_text = "" # EKSİK OLAN HAYATİ SATIR BURASI!
     
     try:
         results = DDGS().text(query, max_results=5)
         if results:
-            research_text = "\n".join([r.get("body", "") for r in results])
+            for r in results:
+                # Sadece gövde (body) metnini alarak LLM'i saf bilgiye odaklıyoruz
+                research_text += f"{r.get('body', '')}\n\n"
+                
+                # Arayüz (Expander) için linkleri topluyoruz
+                if r.get('href'):
+                    urls.append(r.get('href'))
         else:
             research_text = "İnternette şirket hakkında yeterli veri bulunamadı."
             
     except Exception as e:
         print(f"⚠️ Arama Aracı Hatası (Tool Error): {e}")
-        # Sistem çökmek yerine, LLM'e aramanın başarısız olduğunu söylüyoruz.
         research_text = (
             f"İnternet araması şu hata nedeniyle yapılamadı: {e}. "
             f"Lütfen {company} şirketi hakkında sahip olduğun genel bilgiye dayanarak bir analiz yap "
             f"veya veri eksikliği nedeniyle fit_score'u düşük tutarak 'No Signal' olarak işaretle."
         )
     
-    return {"research_data": research_text}
+    return {"research_data": research_text, "source_urls": urls}
 
 
 def analyst_node(state: AgentState) -> dict:
