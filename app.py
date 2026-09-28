@@ -1,10 +1,12 @@
+import os
 import streamlit as st
 import time
 from orchestrator import app, AgentState, generate_leads, crm_node
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-
+from dotenv import load_dotenv
+load_dotenv()
 st.set_page_config(page_title="DealFlow AI - Batch", page_icon="🚀", layout="wide")
 
 st.markdown("""
@@ -234,8 +236,8 @@ if st.session_state.batch_companies:
                         
                         try:
                             # BURAYA KENDİ GMAIL BİLGİLERİNİ GİR
-                            sender_email = "canersetlek68@gmail.com" 
-                            sender_password = "bahjgkhnioyowrzx" 
+                            sender_email = os.getenv("sender_email")
+                            sender_password = os.getenv("sender_password")
                             
                             msg = MIMEMultipart()
                             msg['From'] = sender_email
