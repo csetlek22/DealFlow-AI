@@ -11,3 +11,8 @@ state.db
 __pycache__/
 *.py[cod]
 *$py.class
+
+# Database (Kullanıcı verilerinin ve geçici SQLite dosyalarının GitHub'a gitmemesi için)
+*.db
+*.db-shm
+*.db-wal
