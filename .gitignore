@@ -1,0 +1,13 @@
+# Environments
+.env
+.venv/
+env/
+venv/
+
+# Database (Kullanıcı verilerinin GitHub'a gitmemesi için)
+state.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
