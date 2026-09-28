@@ -6,28 +6,29 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from dotenv import load_dotenv
+
 load_dotenv()
 st.set_page_config(page_title="DealFlow AI - Batch", page_icon="🚀", layout="wide")
 
 st.markdown("""
 <style>
-/* Ana tema */
+/* Main theme */
 .stApp {
     background-color: #FFFFFF;
     color: #2B2B2B;
 }
 
-/* Tüm yazılar */
+/* All headings */
 h1, h2, h3, h4, h5, h6, span, label, div {
     color: #FFFFFF;
 }
 
-/* Tüm yazılar */
-p,span, label, div   {
+/* Text elements */
+p, span, label, div {
     color: #6A1B9A;
 }
 
-/* Butonlar */
+/* Buttons */
 .stButton > button {
     background-color: #F3E5F5 !important;
     color: #FFFFFF !important;
@@ -79,13 +80,13 @@ div[data-baseweb="slider"] div {
     background-color: #6A1B9A !important;
 }
 
-/* Bilgi / başarı kutuları */
+/* Info / Success alerts */
 div[data-testid="stAlert"] {
     border-radius: 8px !important;
     border-left: 5px solid #6A1B9A !important;
 }
 
-/* Lead kartı */
+/* Lead card */
 .lead-card {
     background-color: #FFFFFF;
     border: 2px solid #6A1B9A;
@@ -121,31 +122,31 @@ div[data-testid="stSpinner"] {
     color: #6A1B9A !important;
 }
 
-/* Linkler */
+/* Links */
 a {
     color: #6A1B9A !important;
 }
 </style>
 """, unsafe_allow_html=True)
 
-# --- Session State Yönetimi ---
+# --- Session State Management ---
 if "batch_companies" not in st.session_state:
     st.session_state.batch_companies = []
 if "threads" not in st.session_state:
     st.session_state.threads = {}
 
-st.title("🚀 Otonom Toplu Keşif (Batch Sourcing)")
-st.markdown("Hedef kitleni yaz, Master Ajan şirketleri bulsun, İşçi Ajanlar her birini ayrı ayrı analiz edip mailleri hazırlasın.")
+st.title("🚀 Autonomous Batch Sourcing")
+st.markdown("Enter your target audience, let the Master Agent find companies, and allow Worker Agents to independently analyze them and draft tailored emails.")
 
-# --- 1. Arama ve Master Ajan ---
-target_prompt = st.text_input("Hedef Profiliniz:", placeholder="Örn: actively growing and hiring logistic companies in turkey")
+# --- 1. Search and Master Agent ---
+target_prompt = st.text_input("Target Profile:", placeholder="e.g., actively growing and hiring logistics companies in Turkey")
 
-if st.button("🔍 Toplu Keşfi Başlat", use_container_width=True):
+if st.button("🔍 Start Batch Sourcing", use_container_width=True):
     if target_prompt:
-        with st.spinner("Master Ajan interneti tarıyor ve şirketleri buluyor..."):
+        with st.spinner("Master Agent is scanning the web and identifying target companies..."):
             companies = generate_leads(target_prompt)
             if not companies:
-                st.error("Hedefe uygun şirket bulunamadı.")
+                st.error("No suitable companies found for the specified target profile.")
                 st.stop()
                 
             st.session_state.batch_companies = companies
@@ -162,12 +163,12 @@ if st.button("🔍 Toplu Keşfi Başlat", use_container_width=True):
                 
             st.rerun()
 
-# --- 2. Sonuçları Kategorize Edip Ekrana Basma ---
+# --- 2. Categorize and Display Results ---
 if st.session_state.batch_companies:
     low_fit_list = []
     
     st.markdown("---")
-    st.subheader("📬 İşlenen ve Onay Bekleyen Yüksek Skorlu Şirketler")
+    st.subheader("📬 Processed and Pending High-Score Companies")
     
     for company in st.session_state.batch_companies:
         thread_id = st.session_state.threads.get(company)
@@ -185,57 +186,54 @@ if st.session_state.batch_companies:
             low_fit_list.append(analysis)
             continue
             
-        # YENİ MANTIK: Şirket "Onay Bekliyor" da olsa "İşlemi Bitmiş" de olsa ekranda çizilir
+        # LOGIC: Render the company block whether it is "Pending Approval" or "Finished"
         is_pending = "Human_Approval" in state_info.next
         is_finished = len(state_info.next) == 0
         
         if is_pending or is_finished:
-            with st.expander(f"✨ {company} - Skor: {analysis['fit_score']}/10", expanded=True):
-                st.markdown(f"**📡 Kategori:** {analysis.get('signal_category', '')} | **🔍 Sinyal:** {analysis.get('signal', '')}")
-                st.markdown(f"**🧠 Gerekçe:** {analysis.get('rationale', '')}")
+            with st.expander(f"✨ {company} - Score: {analysis['fit_score']}/10", expanded=True):
+                st.markdown(f"**📡 Category:** {analysis.get('signal_category', '')} | **🔍 Signal:** {analysis.get('signal', '')}")
+                st.markdown(f"**🧠 Rationale:** {analysis.get('rationale', '')}")
                 
-                # --- 1. EKLENEN KISIM: Ajanın Kaynakları ve Ham Verisi ---
-                with st.expander("🔍 Ajanın Kaynakları ve Ham Verisi"):
-                    st.write("**Ziyaret Edilen Linkler:**")
+                # --- 1. Agent Sources and Raw Data ---
+                with st.expander("🔍 Agent's Sources and Raw Data"):
+                    st.write("**Visited Links:**")
                     for url in state.get('source_urls', []): st.markdown(f"- [{url}]({url})")
-                    st.write("**Okunan Ham Veri:**")
-                    st.info(state.get('research_data', 'Veri yok.'))
+                    st.write("**Raw Data Read:**")
+                    st.info(state.get('research_data', 'No data available.'))
                 
                 if is_pending:
-                    # --- İŞLEM BEKLEYEN (AKTİF) DURUM ---
-                    # Streamlit'in inatçı UI önbelleğini kırmak için Dinamik Key kullanıyoruz
+                    # --- PENDING (ACTIVE) STATE ---
+                    # Using a Dynamic Key to bypass Streamlit's aggressive UI caching
                     email_body_value = state.get('draft_email', {}).get('body', '')
                     dynamic_key = f"body_{company}_{len(email_body_value)}"
                     
-                    edited_email_body = st.text_area("Mail İçeriği", value=email_body_value, height=150, key=dynamic_key)
+                    edited_email_body = st.text_area("Email Content", value=email_body_value, height=150, key=dynamic_key)
 
                     c1, c2 = st.columns(2)
-                    with c1: target_email = st.text_input("Alıcı", value=analysis.get('contact_email', 'info@sirket.com'), key=f"email_{company}")
-                    with c2: email_subject = st.text_input("Konu", value=state.get('draft_email', {}).get('subject', 'Tanışma'), key=f"subj_{company}")
+                    with c1: target_email = st.text_input("Recipient", value=analysis.get('contact_email', 'info@company.com'), key=f"email_{company}")
+                    with c2: email_subject = st.text_input("Subject", value=state.get('draft_email', {}).get('subject', 'Introduction'), key=f"subj_{company}")
                     
-                    feedback = st.text_input("Geri Bildirim:", key=f"fb_{company}")
+                    feedback = st.text_input("Feedback:", key=f"fb_{company}")
                     
                     b1, b2, b3 = st.columns(3)
                     
-                    # --- 2. GÜNCELLENEN KISIM: Grafı bitirmeden sadece manuel Notion'a kaydeder ---
-                    if b1.button("💾 Sadece CRM'e Kaydet", key=f"btn_save_{company}", use_container_width=True):
-                        # State'i LangGraph'a güncelliyoruz ama grafı (app.stream) İLERLETMİYORUZ
+                    # --- 2. Manual CRM save without advancing the graph ---
+                    if b1.button("💾 Save to CRM Only", key=f"btn_save_{company}", use_container_width=True):
+                        # Update state in LangGraph without advancing the graph via app.stream
                         app.update_state(config, {"draft_email": {"subject": email_subject, "body": edited_email_body}, "human_feedback": None}, as_node="Human_Approval")
                         
-                        with st.spinner("Notion'a kaydediliyor..."):
-                            # Güncel state'i alıp CRM ajanını graf dışında manuel çalıştırıyoruz
+                        with st.spinner("Saving to Notion..."):
                             current_state = app.get_state(config).values
                             crm_node(current_state)
                             
-                        st.success("✅ Notion CRM'e kaydedildi. Form hala aktif; düzenleyebilir, yeniden yazdırabilir veya gönderebilirsiniz.")
+                        st.success("✅ Saved to Notion CRM. Form remains active; you can edit, rewrite, or send.")
                         
-                    # (Diğer butonlar aynı mantıkla kalıyor)
-                    if b2.button("📧 Kaydet & Gönder", key=f"btn_send_{company}", use_container_width=True):
+                    if b2.button("📧 Save & Send", key=f"btn_send_{company}", use_container_width=True):
                         app.update_state(config, {"draft_email": {"subject": email_subject, "body": edited_email_body}, "human_feedback": None}, as_node="Human_Approval")
                         for _ in app.stream(None, config): pass
                         
                         try:
-                            # BURAYA KENDİ GMAIL BİLGİLERİNİ GİR
                             sender_email = os.getenv("sender_email")
                             sender_password = os.getenv("sender_password")
                             
@@ -250,15 +248,15 @@ if st.session_state.batch_companies:
                             server.send_message(msg)
                             server.quit()
                             
-                            st.session_state[f"status_{company}"] = f"✅ CRM'e kaydedildi ve Mail Başarıyla {target_email} adresine Gönderildi!"
+                            st.session_state[f"status_{company}"] = f"✅ Saved to CRM and Email successfully sent to {target_email}!"
                         except Exception as e:
-                            st.session_state[f"status_{company}"] = f"⚠️ CRM'e kaydedildi ancak Mail Gönderim Hatası: {e}"
+                            st.session_state[f"status_{company}"] = f"⚠️ Saved to CRM but encountered an email transmission error: {e}"
                         st.rerun()
                         
-                    if b3.button("🔄 Yeniden Yaz", key=f"btn_rew_{company}", use_container_width=True):
+                    if b3.button("🔄 Rewrite", key=f"btn_rew_{company}", use_container_width=True):
                         if feedback:
                             app.update_state(config, {"human_feedback": feedback}, as_node="Human_Approval")
-                            with st.spinner("Ajan yeniden yazıyor..."):
+                            with st.spinner("Agent is rewriting the draft..."):
                                 for _ in app.stream(None, config): pass
                             
                             for k in [f"body_{company}", f"subj_{company}", f"email_{company}", f"fb_{company}"]:
@@ -266,30 +264,30 @@ if st.session_state.batch_companies:
                                     del st.session_state[k]
                             st.rerun()
                         else:
-                            st.error("Lütfen ajan için bir geri bildirim yazınız.")
+                            st.error("Please provide feedback for the agent.")
                 
                 else:
-                    # --- İŞLEMİ BİTMİŞ (SALT OKUNUR) DURUM ---
-                    status_message = st.session_state.get(f"status_{company}", "✅ Bu şirket için işlemler tamamlandı ve CRM'e aktarıldı.")
+                    # --- FINISHED (READ-ONLY) STATE ---
+                    status_message = st.session_state.get(f"status_{company}", "✅ Processing completed for this company and saved to CRM.")
                     
                     if "⚠️" in status_message or "❌" in status_message:
                         st.warning(status_message)
                     else:
                         st.success(status_message)
                         
-                    # Ekran kaybolmasın diye maili 'disabled' (değiştirilemez) olarak çiziyoruz
-                    st.text_area("Kaydedilen / Gönderilen Mail İçeriği", value=state.get('draft_email', {}).get('body', ''), height=150, disabled=True, key=f"body_done_{company}")
+                    # Render the email as disabled to prevent further edits after execution
+                    st.text_area("Saved / Sent Email Content", value=state.get('draft_email', {}).get('body', ''), height=150, disabled=True, key=f"body_done_{company}")
 
-    # --- 3. Düşük Skorlular Alanı ---
+    # --- 3. Low-Score Area ---
     if low_fit_list:
         st.markdown("---")
-        st.subheader("🗑️ Uyumsuz Şirketler (Fit Skoru < 7)")
+        st.subheader("🗑️ Poor Fit Companies (Fit Score < 7)")
         for low_comp in low_fit_list:
-            st.info(f"**{low_comp['company_name']}** (Skor: {low_comp['fit_score']}) - *{low_comp['rationale']}*")
+            st.info(f"**{low_comp['company_name']}** (Score: {low_comp['fit_score']}) - *{low_comp['rationale']}*")
 
-    # --- 4. Her Şeyi Temizle Butonu ---
+    # --- 4. Clear All Button ---
     st.markdown("---")
-    if st.button("🗑️ Tüm Sonuçları Temizle ve Ekrani Sıfırla", use_container_width=True):
+    if st.button("🗑️ Clear All Results and Reset Data", use_container_width=True):
         st.session_state.batch_companies = []
         st.session_state.threads = {}
         st.rerun()
