@@ -40,7 +40,7 @@ cd dealflow-ai
 ```
 
 **2. Set up the environment using `uv**`
-Create a virtual environment and install the dependencies defined in `pyproject.toml`:
+Create a virtual environment and install the dependencies defined in `pyproject.toml`:**
 
 ```bash
 uv venv
