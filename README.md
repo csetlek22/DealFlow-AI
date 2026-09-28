@@ -1,10 +1,3 @@
-
----
-
-### 📄 README.md (Profesyonel ve İngilizce)
-
-Projenin ana dizininde `README.md` adında bir dosya oluştur ve aşağıdaki profesyonel dokümantasyonu doğrudan yapıştır.
-
 ```markdown
 # 🔮 DealFlow AI: Autonomous B2B Lead Orchestrator
 
