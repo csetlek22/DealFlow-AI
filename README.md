@@ -1,4 +1,4 @@
-# 🔮 DealFlow AI
+# 🔮 DealFlow AI: Autonomous B2B Lead Orchestrator
 
 DealFlow AI is an autonomous, multi-agent SaaS application designed to revolutionize B2B lead generation and cold outreach. Built with a robust Map-Reduce architecture, it discovers target companies, analyzes their growth signals, scores their fit, and drafts hyper-personalized cold emails—while keeping the human in the loop.
 
