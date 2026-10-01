@@ -159,7 +159,7 @@ if st.button("🔍 Start Batch Sourcing", use_container_width=True):
                 config = {"configurable": {"thread_id": thread_id}}
                 
                 for _ in app.stream(initial_state, config): pass
-                time.sleep(1) 
+                time.sleep(4) 
                 
             st.rerun()
 
@@ -215,44 +215,84 @@ if st.session_state.batch_companies:
                     with c2: email_subject = st.text_input("Subject", value=state.get('draft_email', {}).get('subject', 'Introduction'), key=f"subj_{company}")
                     
                     feedback = st.text_input("Feedback:", key=f"fb_{company}")
+
+                    if f"status_{company}" in st.session_state:
+                        status_message = st.session_state[f"status_{company}"]
+
+                        if "⚠️" in status_message or "❌" in status_message:
+                            st.warning(status_message)
+                        else:
+                            st.success(status_message)
                     
                     b1, b2, b3 = st.columns(3)
                     
                     # --- 2. Manual CRM save without advancing the graph ---
                     if b1.button("💾 Save to CRM Only", key=f"btn_save_{company}", use_container_width=True):
-                        # Update state in LangGraph without advancing the graph via app.stream
-                        app.update_state(config, {"draft_email": {"subject": email_subject, "body": edited_email_body}, "human_feedback": None}, as_node="Human_Approval")
-                        
+                        app.update_state(
+                            config,
+                            {
+                                "draft_email": {
+                                    "subject": email_subject,
+                                    "body": edited_email_body
+                                },
+                                "human_feedback": None
+                            }
+                        )
+
                         with st.spinner("Saving to Notion..."):
                             current_state = app.get_state(config).values
                             crm_node(current_state)
-                            
-                        st.success("✅ Saved to Notion CRM. Form remains active; you can edit, rewrite, or send.")
-                        
-                    if b2.button("📧 Save & Send", key=f"btn_send_{company}", use_container_width=True):
-                        app.update_state(config, {"draft_email": {"subject": email_subject, "body": edited_email_body}, "human_feedback": None}, as_node="Human_Approval")
-                        for _ in app.stream(None, config): pass
-                        
-                        try:
-                            sender_email = os.getenv("sender_email")
-                            sender_password = os.getenv("sender_password")
-                            
-                            msg = MIMEMultipart()
-                            msg['From'] = sender_email
-                            msg['To'] = target_email
-                            msg['Subject'] = email_subject
-                            msg.attach(MIMEText(edited_email_body, 'plain'))
-                            
-                            server = smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=5)
-                            server.login(sender_email, sender_password)
-                            server.send_message(msg)
-                            server.quit()
-                            
-                            st.session_state[f"status_{company}"] = f"✅ Saved to CRM and Email successfully sent to {target_email}!"
-                        except Exception as e:
-                            st.session_state[f"status_{company}"] = f"⚠️ Saved to CRM but encountered an email transmission error: {e}"
+
+                        st.session_state[f"status_{company}"] = "✅ Saved to Notion CRM. Form remains active."
                         st.rerun()
-                        
+                                            
+                    if b2.button("📧 Save & Send", key=f"btn_send_{company}", use_container_width=True):
+                        app.update_state(
+                            config,
+                            {
+                                "draft_email": {
+                                    "subject": email_subject,
+                                    "body": edited_email_body
+                                },
+                                "human_feedback": None
+                            }
+                        )
+
+                        with st.spinner("Saving to Notion and sending email..."):
+                            current_state = app.get_state(config).values
+
+                            # Save to CRM
+                            crm_node(current_state)
+
+                            try:
+                                sender_email = os.getenv("sender_email")
+                                sender_password = os.getenv("sender_password")
+
+                                msg = MIMEMultipart()
+                                msg["From"] = sender_email
+                                msg["To"] = target_email
+                                msg["Subject"] = email_subject
+                                msg.attach(MIMEText(edited_email_body, "plain"))
+
+                                server = smtplib.SMTP_SSL(
+                                    "smtp.gmail.com",
+                                    465,
+                                    timeout=5
+                                )
+                                server.login(sender_email, sender_password)
+                                server.send_message(msg)
+                                server.quit()
+
+                                st.session_state[f"status_{company}"] = (
+                                    f"✅ Saved to CRM and email successfully sent to {target_email}!"
+                                )
+
+                            except Exception as e:
+                                st.session_state[f"status_{company}"] = (
+                                    f"⚠️ Saved to CRM but email transmission failed: {e}"
+                                )
+
+                        st.rerun()                        
                     if b3.button("🔄 Rewrite", key=f"btn_rew_{company}", use_container_width=True):
                         if feedback:
                             app.update_state(config, {"human_feedback": feedback}, as_node="Human_Approval")
