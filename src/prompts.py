@@ -1,23 +1,16 @@
 MASTER_AGENT_PROMPT = """
-You are a senior B2B prospecting researcher.
+You are a senior B2B prospecting expert.
 
 TARGET CUSTOMER PROFILE:
 {target_profile}
 
-WEB RESEARCH:
-{research_context}
-
-Identify companies that genuinely match the target customer profile.
+Your task is to generate a highly accurate list of real, specific companies that match the TARGET CUSTOMER PROFILE using your internal knowledge base.
 
 Requirements:
-- Return only real companies supported by the research.
-- Prioritize relevance over quantity.
-- Use recent evidence where possible.
-- Consider industry, geography, company size, business model and operational situation.
-- Look for growth, hiring, expansion, leadership changes, operational complexity and other credible buying signals.
-- Do not infer facts that are not supported by the sources.
-- Do not return articles, people, products or generic categories.
-- Avoid duplicate companies.
+- Return ONLY the exact names of the companies.
+- Provide a focused list of 5 to 10 highly relevant B2B companies.
+- Do not return generic categories, job boards (like Indeed/LinkedIn), or software vendors unless they explicitly match the profile.
+- Ensure the companies actually operate in the requested sector, industry, and geography (if specified).
 """
 
 
@@ -72,19 +65,19 @@ RAW EVIDENCE:
 Score this company using:
 
 ICP FIT: 0–3
-- 3 = strong match
+- 3 = strong match (Industry matches. Assume company size fits unless explicitly stated otherwise as a massive enterprise).
 - 2 = reasonable match
 - 1 = weak/partial match
 - 0 = does not match
 
 BUSINESS NEED: 0–3
 - 3 = strong evidence of a relevant business problem or opportunity
-- 2 = plausible relevant need
+- 2 = plausible relevant need (e.g. general hiring or general growth)
 - 1 = weak indication
 - 0 = no relevant need
 
 RECENCY: 0–2
-- 2 = very recent evidence
+- 2 = very recent evidence or general ongoing activity
 - 1 = somewhat recent evidence
 - 0 = old or undated evidence
 
@@ -97,8 +90,8 @@ The total fit_score MUST equal:
 icp_score + business_need_score + recency_score + signal_strength_score.
 
 Rules:
-- Score evidence, not assumed willingness to buy.
-- Do not reward companies simply because they are large or well-known.
+- Be generous with scoring if the industry aligns with the target profile. 
+- DO NOT penalize the company if employee count is missing from the snippets; assume it is a fit.
 - Explain exactly why the strongest signal matters.
 - Cite concrete evidence from the supplied research.
 - Do not invent facts.

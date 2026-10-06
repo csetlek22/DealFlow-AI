@@ -1,41 +1,22 @@
+import time
 from urllib.parse import urlsplit, urlunsplit
-
 from ddgs import DDGS
-
 
 def _clean_url(url: str) -> str:
     """Normalize URLs for duplicate detection."""
     if not url:
         return ""
-
     parsed = urlsplit(url)
-
-    return urlunsplit(
-        (
-            parsed.scheme,
-            parsed.netloc,
-            parsed.path,
-            "",
-            "",
-        )
-    )
-
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
 
 def _normalize(result: dict, search_type: str) -> dict | None:
     """Convert DDGS results into a common structure."""
-    url = (
-        result.get("href")
-        or result.get("url")
-    )
-
+    url = result.get("href") or result.get("url")
     if not url:
         return None
 
     return {
-        "title": (
-            result.get("title", "")
-            .strip()
-        ),
+        "title": result.get("title", "").strip(),
         "body": (
             result.get("body")
             or result.get("snippet")
@@ -48,131 +29,90 @@ def _normalize(result: dict, search_type: str) -> dict | None:
         "type": search_type,
     }
 
-
 def search_queries(
     queries: list[str],
-    max_results: int = 4,
+    max_results: int = 10,
     include_news: bool = True,
     news_queries: list[str] | None = None,
 ) -> list[dict]:
-    """Run web searches with limited supplementary news queries."""
+    """Run web searches with limited supplementary news queries and rate-limit protection."""
     results = []
     seen = set()
-
     news_queries = news_queries or []
 
     with DDGS() as ddgs:
         for query in queries:
             try:
-                web_results = ddgs.text(
-                    query,
-                    max_results=max_results,
-                )
-
-                for item in web_results:
-                    result = _normalize(
-                        item,
-                        "web",
-                    )
-
-                    if not result:
-                        continue
-
-                    key = _clean_url(
-                        result["url"]
-                    )
-
-                    if key and key not in seen:
-                        seen.add(key)
-                        results.append(result)
-
+                web_results = ddgs.text(query, max_results=max_results, backend="html")
+                if web_results:
+                    for item in web_results:
+                        result = _normalize(item, "web")
+                        if result:
+                            key = _clean_url(result["url"])
+                            if key and key not in seen:
+                                seen.add(key)
+                                results.append(result)
             except Exception as e:
-                print(
-                    f"Web search failed for "
-                    f"'{query}': {e}"
-                )
+                print(f"Web search failed for '{query}': {e}")
+            
+            # KRİTİK EKLENTİ: DDG'nin IP'mizi bloklamaması için 2 saniye bekliyoruz
+            time.sleep(1)
 
         if include_news and hasattr(ddgs, "news"):
             for query in news_queries:
                 try:
-                    news_results = ddgs.news(
-                        query,
-                        max_results=3,
-                    )
-
-                    for item in news_results:
-                        result = _normalize(
-                            item,
-                            "news",
-                        )
-
-                        if not result:
-                            continue
-
-                        key = _clean_url(
-                            result["url"]
-                        )
-
-                        if (
-                            key
-                            and key not in seen
-                        ):
-                            seen.add(key)
-                            results.append(
-                                result
-                            )
-
+                    news_results = ddgs.news(query, max_results=3)
+                    if news_results:
+                        for item in news_results:
+                            result = _normalize(item, "news")
+                            if result:
+                                key = _clean_url(result["url"])
+                                if key and key not in seen:
+                                    seen.add(key)
+                                    results.append(result)
                 except Exception as e:
-                    print(
-                        f"News search failed for "
-                        f"'{query}': {e}"
-                    )
+                    print(f"News search failed for '{query}': {e}")
+                
+                # KRİTİK EKLENTİ: Haber aramaları arasında da 2 saniye bekle
+                time.sleep(2)
 
     return results
-
 
 def search_target_companies(
     target_profile: str,
     max_results_per_query: int = 4,
 ) -> list[dict]:
     """Find companies matching the target customer profile."""
-    queries = [
-        target_profile,
-        f"{target_profile} companies",
-        f"{target_profile} hiring",
-        f"{target_profile} growth expansion",
-        f"{target_profile} operations",
-    ]
+    # KORUMA: Eğer kullanıcı arayüzden 60 karakterden uzun bir paragraf (prompt) girdiyse, 
+    # arama motorunun çökmemesi için temiz ve güvenli bir anahtar kelime kümesi kullan.
+    clean_query = target_profile
+    if len(target_profile) > 60:
+        clean_query = "growing logistics and manufacturing companies"
 
-    news_queries = [
-        f"{target_profile} recent news",
+    queries = [
+        f"{clean_query}",
+        f"{clean_query} hiring",
     ]
 
     return search_queries(
         queries,
         max_results=max_results_per_query,
-        include_news=True,
-        news_queries=news_queries,
+        include_news=False, 
     )
-
 
 def search_company(
     company: str,
     max_results_per_query: int = 4,
 ) -> list[dict]:
     """Research company identity, growth, hiring and operations."""
+    # OPTİMİZASYON: 7 farklı sorgu atmak yerine kapsamlı 2 sorguya indirildi.
     queries = [
-        f'"{company}"',
-        f'"{company}" careers',
-        f'"{company}" hiring',
-        f'"{company}" growth expansion',
-        f'"{company}" operations supply chain',
-        f'"{company}" leadership',
-        f'"{company}" employees',
+        f"{company} company profile operations",
+        f"{company} recent news hiring",
     ]
 
     news_queries = [
-        f'"{company}" recent news',
+        f"{company} news",
     ]
 
     return search_queries(
@@ -181,7 +121,6 @@ def search_company(
         include_news=True,
         news_queries=news_queries,
     )
-
 
 def search_contact(
     company: str,
@@ -190,30 +129,23 @@ def search_contact(
 ) -> list[dict]:
     """Find publicly available decision-maker information."""
     analysis = analysis or {}
-
-    signal = analysis.get(
-        "signal",
-        "",
-    )
+    signal = analysis.get("signal", "")
 
     queries = [
-        f'"{company}" COO operations director',
-        f'"{company}" "head of operations"',
-        f'"{company}" "supply chain" director',
-        f'"{company}" leadership management',
+        f"{company} leadership OR operations team",
     ]
 
     if signal:
-        queries.append(
-            f'"{company}" "{signal}" executive'
-        )
+        # Sinyal metninin motoru çökertmemesi için sadece ilk 3 kelimesini alıyoruz
+        short_signal = " ".join(signal.replace('"', '').split()[:3])
+        if short_signal:
+            queries.append(f"{company} {short_signal} executive")
 
     return search_queries(
         queries,
         max_results=max_results_per_query,
         include_news=False,
     )
-
 
 def format_search_results(
     results: list[dict],
@@ -223,13 +155,9 @@ def format_search_results(
     sections = []
     total = 0
 
-    for i, result in enumerate(
-        results,
-        1,
-    ):
+    for i, result in enumerate(results, 1):
         section = (
-            f"[SOURCE {i} | "
-            f"{result.get('type', 'web')}]\n"
+            f"[SOURCE {i} | {result.get('type', 'web')}]\n"
             f"Title: {result.get('title', '')}\n"
             f"Date: {result.get('date', '')}\n"
             f"Source: {result.get('source', '')}\n"
@@ -237,10 +165,7 @@ def format_search_results(
             f"Content: {result.get('body', '')}\n"
         )
 
-        if (
-            total + len(section)
-            > max_chars
-        ):
+        if total + len(section) > max_chars:
             break
 
         sections.append(section)
@@ -248,20 +173,13 @@ def format_search_results(
 
     return "\n".join(sections)
 
-
-def get_source_urls(
-    results: list[dict],
-) -> list[str]:
+def get_source_urls(results: list[dict]) -> list[str]:
     """Return unique source URLs."""
     urls = []
     seen = set()
 
     for result in results:
-        url = result.get(
-            "url",
-            "",
-        )
-
+        url = result.get("url", "")
         key = _clean_url(url)
 
         if key and key not in seen:

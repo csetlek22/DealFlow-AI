@@ -2,8 +2,7 @@ import re
 import uuid
 import streamlit as st
 from dotenv import load_dotenv
-
-from orchestrator import app, AgentState, generate_leads, QUALIFIED_SCORE
+from orchestrator import app, AgentState, generate_leads, QUALIFIED_SCORE, crm_node
 from email_service import send_email
 
 
@@ -268,10 +267,11 @@ if st.session_state.batch_companies:
                             as_node="Human_Approval",
                         )
 
-                        for _ in app.stream(None, config):
-                            pass
+                        # V7'DEKİ KESİN ÇALIŞAN MANTIK: Grafiği ilerletmeden manuel CRM kaydı
+                        current_state = app.get_state(config).values
+                        crm_node(current_state)
 
-                        st.success("Saved to CRM.")
+                        st.success("✅ Saved to CRM. Form remains active.")
                         st.rerun()
 
                     except Exception as e:
@@ -307,10 +307,11 @@ if st.session_state.batch_companies:
                             as_node="Human_Approval",
                         )
 
-                        for _ in app.stream(None, config):
-                            pass
+                        # Manuel CRM Kaydı
+                        current_state = app.get_state(config).values
+                        crm_node(current_state)
 
-                        st.success(f"Email sent to {recipient}")
+                        st.success(f"✅ Email sent to {recipient} and saved to CRM.")
                         st.rerun()
 
                     except Exception as e:
