@@ -16,21 +16,76 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-.stApp { background:#fff; }
-h1,h2,h3,p,span,label { color:#2B2B2B; }
-.stButton > button {
-    background:#6A1B9A !important;
-    color:#fff !important;
-    border:0;
-    border-radius:8px;
+/* Semantic palette: light theme defaults, dark theme overrides below. */
+:root {
+    --df-page-bg: #ffffff;
+    --df-surface: #f8fafc;
+    --df-text: #1f2937;
+    --df-text-secondary: #6b7280;
+    --df-border: #e5e7eb;
+    --df-accent: #6d28d9;
+    --df-accent-hover: #7c3aed;
+    --df-success: #16a34a;
+    --df-warning: #d97706;
+    --df-error: #dc2626;
 }
-.stButton > button:hover { background:#8E24AA !important; }
-div[data-baseweb="input"] input, textarea { border-color:#6A1B9A !important; }
+
+@media (prefers-color-scheme: dark) {
+    :root {
+        --df-page-bg: #0f1115;
+        --df-surface: #1a1d24;
+        --df-text: #f3f4f6;
+        --df-text-secondary: #9ca3af;
+        --df-border: #2d333b;
+        --df-accent: #6d28d9;
+        --df-accent-hover: #5b21b6;
+        --df-success: #4ade80;
+        --df-warning: #fbbf24;
+        --df-error: #f87171;
+    }
+
+    a { color: #c4b5fd; }
+}
+
+.stApp { background: var(--df-page-bg); }
+
+h1, h2, h3, p, span, label { color: var(--df-text); }
+
+a { color: var(--df-accent); }
+
+.stButton > button {
+    background: var(--df-accent) !important;
+    color: #ffffff !important;
+    border: 0;
+    border-radius: 8px;
+}
+.stButton > button:hover { background: var(--df-accent-hover) !important; }
+.stButton > button:focus-visible {
+    outline: 2px solid var(--df-accent) !important;
+    outline-offset: 2px;
+}
+.stButton > button:disabled {
+    background: var(--df-border) !important;
+    color: var(--df-text-secondary) !important;
+    opacity: 0.7;
+}
+
+div[data-baseweb="input"] input,
+textarea {
+    border-color: var(--df-border) !important;
+}
+
+div[data-baseweb="input"] input::placeholder,
+textarea::placeholder {
+    color: var(--df-text-secondary) !important;
+}
+
 .lead-card {
-    border:1px solid #ddd;
-    border-radius:12px;
-    padding:18px;
-    margin-bottom:16px;
+    border: 1px solid var(--df-border);
+    border-radius: 12px;
+    padding: 18px;
+    margin-bottom: 16px;
+    background: var(--df-surface);
 }
 </style>
 """, unsafe_allow_html=True)

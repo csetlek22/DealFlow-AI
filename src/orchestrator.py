@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sqlite3
 from pathlib import Path
 from typing import TypedDict
@@ -141,9 +142,133 @@ def _clean_candidates(candidates, limit=25):
     return result[:limit]
 
 
+def _normalize_company_name(value):
+    """Lowercase, strip punctuation and collapse whitespace for matching."""
+    value = (value or "").strip().lower()
+    value = re.sub(r"[^\w\s]", " ", value, flags=re.UNICODE)
+    value = re.sub(r"\s+", " ", value)
+    return value.strip()
+
+
+def get_existing_crm_companies():
+    """Return (names, domains) already present in the Notion CRM database."""
+    if not NOTION_DATABASE_ID:
+        raise ValueError("NOTION_DATABASE_ID is missing.")
+
+    database = notion.databases.retrieve(database_id=NOTION_DATABASE_ID)
+    data_sources = database.get("data_sources") or []
+
+    if not data_sources:
+        raise ValueError("Notion database has no linked data source.")
+
+    names = set()
+    domains = set()
+    cursor = None
+
+    while True:
+        params = {
+            "data_source_id": data_sources[0]["id"],
+            "page_size": 100,
+        }
+
+        if cursor:
+            params["start_cursor"] = cursor
+
+        response = notion.data_sources.query(**params)
+
+        for page in response.get("results", []):
+            properties = page.get("properties") or {}
+
+            title_blocks = (properties.get("Company") or {}).get("title") or []
+
+            name = "".join(
+                block.get("plain_text", "")
+                for block in title_blocks
+            ).strip()
+
+            if name:
+                names.add(name)
+
+                # A name that is itself a URL/domain is also a domain hint.
+                name_domain = _extract_domain(name)
+
+                if (
+                    name_domain
+                    and "." in name_domain
+                    and " " not in name_domain
+                ):
+                    domains.add(name_domain)
+
+            # "Contact Email" is the only domain-bearing property the CRM stores.
+            email = (properties.get("Contact Email") or {}).get("email")
+
+            if email and "@" in email:
+                email_domain = email.rsplit("@", 1)[-1].lower().strip()
+
+                if (
+                    email_domain
+                    and "." in email_domain
+                    and " " not in email_domain
+                ):
+                    domains.add(email_domain)
+
+        if not response.get("has_more"):
+            break
+
+        cursor = response.get("next_cursor")
+
+        if not cursor:
+            break
+
+    return names, domains
+
+
+def _filter_existing(candidates, existing_names, existing_domains):
+    """Split candidates into new (kept) and already-in-CRM (excluded)."""
+    existing = {
+        _normalize_company_name(name)
+        for name in existing_names
+    }
+
+    kept = []
+    excluded = []
+
+    for candidate in candidates:
+        name_key = _normalize_company_name(candidate.company_name)
+        domain = _extract_domain(candidate.website) if candidate.website else ""
+
+        if (
+            (name_key and name_key in existing)
+            or (domain and domain in existing_domains)
+        ):
+            excluded.append(candidate.company_name)
+        else:
+            kept.append(candidate)
+
+    return kept, excluded
+
+
 def generate_leads(target_profile):
-    """Discover candidates via Tavily, then qualify them against the profile."""
+    """Discover candidates via Tavily, filter out CRM duplicates, then qualify."""
     profile = target_profile.strip() or DEFAULT_PROFILE
+
+    # Load existing CRM companies once. If we can't read them, fail safe (skip
+    # the batch) so we never risk surfacing a company already in the CRM.
+    try:
+        existing_names, existing_domains = get_existing_crm_companies()
+    except Exception as e:
+        print(
+            f"❌ Notion CRM lookup failed: {type(e).__name__}: {e} — "
+            "skipping batch (fail-safe)."
+        )
+        return []
+
+    existing_set = {
+        _normalize_company_name(name)
+        for name in existing_names
+    }
+
+    print(f"📒 Existing CRM companies loaded: {len(existing_names)}")
 
     print("🌍 Master Agent: Discovering candidate companies via Tavily...")
 
@@ -180,14 +305,28 @@ def generate_leads(target_profile):
         print(f"Discovery error: {e}")
         return []
 
+    print(f"🔎 Discovery candidates: {len(candidates)}")
+
     if not candidates:
         print("Master Agent: no candidates discovered.")
         return []
 
-    print(
-        f"Master Agent: {len(candidates)} candidates discovered. "
-        "Qualifying..."
+    candidates, excluded = _filter_existing(
+        candidates,
+        existing_names,
+        existing_domains,
     )
+
+    if excluded:
+        preview = ", ".join(excluded[:5])
+        suffix = "..." if len(excluded) > 5 else ""
+        print(f"🚫 Excluded as existing ({len(excluded)}): {preview}{suffix}")
+
+    if not candidates:
+        print("Master Agent: all candidates already exist in CRM.")
+        return []
+
+    print(f"🧪 Candidates sent to Gemini: {len(candidates)}")
 
     try:
         qualified = llm.with_structured_output(
@@ -215,7 +354,14 @@ def generate_leads(target_profile):
 
     companies = _clean_companies(companies)
 
-    print(f"Master Agent: {len(companies)} companies qualified.")
+    # Final safety check: never return a company already in the CRM.
+    companies = [
+        company
+        for company in companies
+        if _normalize_company_name(company) not in existing_set
+    ]
+
+    print(f"🎯 Qualified companies: {len(companies)}")
     return companies
 
 
