@@ -216,22 +216,37 @@ if st.session_state.batch_companies:
 
             st.write("### Email")
 
+            # The keyed widgets are the single source of truth for the editable
+            # draft. Seed them from the authoritative checkpoint on first render,
+            # and after a Rewrite copy the freshly generated draft in (before the
+            # widgets are instantiated, since Streamlit forbids setting widget
+            # keys after the widget is created).
+            if st.session_state.pop(f"rewrite_sync_{thread_id}", False):
+                st.session_state[f"subject_{thread_id}"] = draft.get("subject", "")
+                st.session_state[f"body_{thread_id}"] = draft.get("body", "")
+                st.session_state[f"feedback_{thread_id}"] = ""
+
+            for _key, _initial in (
+                (f"body_{thread_id}", draft.get("body", "")),
+                (f"subject_{thread_id}", draft.get("subject", "")),
+                (f"recipient_{thread_id}", contact.get("contact_email", "") or ""),
+            ):
+                if _key not in st.session_state:
+                    st.session_state[_key] = _initial
+
             email_body = st.text_area(
                 "Email Body",
-                value=draft.get("body", ""),
                 height=220,
                 key=f"body_{thread_id}",
             )
 
             email_subject = st.text_input(
                 "Subject",
-                value=draft.get("subject", ""),
                 key=f"subject_{thread_id}",
             )
 
             recipient = st.text_input(
                 "Recipient",
-                value=contact.get("contact_email", "") or "",
                 key=f"recipient_{thread_id}",
             )
 
@@ -362,14 +377,11 @@ if st.session_state.batch_companies:
                         for _ in app.stream(None, config):
                             pass
 
-                        # Refresh the widgets so the rewritten subject/body
-                        # appear immediately instead of the previous draft.
-                        new_state = app.get_state(config).values
-                        new_draft = new_state.get("draft_email") or {}
-
-                        st.session_state[f"subject_{thread_id}"] = new_draft.get("subject", "")
-                        st.session_state[f"body_{thread_id}"] = new_draft.get("body", "")
-                        st.session_state[f"feedback_{thread_id}"] = ""
+                        # The checkpoint now holds the rewritten draft. Flag a
+                        # sync so the next run copies it into the widget keys
+                        # BEFORE the widgets render (setting widget keys after
+                        # instantiation raises StreamlitAPIException).
+                        st.session_state[f"rewrite_sync_{thread_id}"] = True
 
                         st.rerun()
 
