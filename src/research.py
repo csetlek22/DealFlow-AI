@@ -246,8 +246,9 @@ def search_contact(
     signal = analysis.get("signal", "")
 
     queries = [
-        f"{company} leadership team",
+        f"{company} leadership team executives",
         f"{company} contact email address",
+        f"{company} COO OR operations director OR head of operations",
     ]
 
     if signal:

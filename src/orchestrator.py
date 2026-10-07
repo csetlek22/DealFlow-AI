@@ -24,8 +24,10 @@ from research import (
     format_search_results,
     get_source_urls,
 )
+from hunter import enrich_email, _extract_domain
 from prompts import (
-    MASTER_AGENT_PROMPT,
+    DISCOVERY_PROMPT,
+    QUALIFICATION_PROMPT,
     RESEARCHER_PROMPT,
     ANALYST_PROMPT,
     CONTACT_RESEARCHER_PROMPT,
@@ -119,17 +121,40 @@ def _clean_companies(companies):
     return result[:MAX_COMPANIES]
 
 
+def _clean_candidates(candidates, limit=25):
+    """Deduplicate candidate companies by name."""
+    seen = set()
+    result = []
+
+    for candidate in candidates or []:
+        name = (candidate.company_name or "").strip()
+
+        if not name:
+            continue
+
+        key = name.lower()
+
+        if key not in seen:
+            seen.add(key)
+            result.append(candidate)
+
+    return result[:limit]
+
+
 def generate_leads(target_profile):
-    """Discover real companies via Tavily and qualify them against the profile."""
+    """Discover candidates via Tavily, then qualify them against the profile."""
     profile = target_profile.strip() or DEFAULT_PROFILE
 
-    print("🌍 Master Agent: Searching the web for matching companies...")
+    print("🌍 Master Agent: Discovering candidate companies via Tavily...")
 
-    results = search_target_companies(profile)
+    results = search_target_companies(
+        profile,
+        max_results_per_query=8,
+    )
 
     context = format_search_results(
         results,
-        max_chars=20000,
+        max_chars=40000,
     )
 
     if not context.strip():
@@ -137,25 +162,61 @@ def generate_leads(target_profile):
         return []
 
     try:
-        candidates = llm.with_structured_output(
+        discovered = llm.with_structured_output(
             CompanyCandidateList
         ).invoke(
-            MASTER_AGENT_PROMPT.format(
+            DISCOVERY_PROMPT.format(
                 target_profile=profile,
                 search_results=context,
             )
         )
 
+        candidates = _clean_candidates(
+            discovered.candidates,
+            limit=25,
+        )
+
+    except Exception as e:
+        print(f"Discovery error: {e}")
+        return []
+
+    if not candidates:
+        print("Master Agent: no candidates discovered.")
+        return []
+
+    print(
+        f"Master Agent: {len(candidates)} candidates discovered. "
+        "Qualifying..."
+    )
+
+    try:
+        qualified = llm.with_structured_output(
+            CompanyCandidateList
+        ).invoke(
+            QUALIFICATION_PROMPT.format(
+                target_profile=profile,
+                candidates=_json(
+                    [candidate.model_dump() for candidate in candidates]
+                ),
+            )
+        )
+
         companies = [
             candidate.company_name
-            for candidate in candidates.candidates
+            for candidate in qualified.candidates
         ]
 
     except Exception as e:
-        print(f"Lead generation error: {e}")
-        return []
+        print(f"Qualification error: {e}")
+        companies = [
+            candidate.company_name
+            for candidate in candidates[:10]
+        ]
 
-    return _clean_companies(companies)
+    companies = _clean_companies(companies)
+
+    print(f"Master Agent: {len(companies)} companies qualified.")
+    return companies
 
 
 def researcher_node(state):
@@ -248,6 +309,23 @@ def analyst_node(state):
     }
 
 
+def _hunter_enrich(state):
+    """Derive a company domain and enrich with Hunter if configured."""
+    research = state.get("company_research") or {}
+    domain = _extract_domain(research.get("website"))
+
+    if not domain:
+        for url in state.get("source_urls") or []:
+            domain = _extract_domain(url)
+            if domain:
+                break
+
+    if not domain:
+        return None
+
+    return enrich_email(domain)
+
+
 def contact_researcher_node(state):
     """Find a relevant decision-maker using public evidence."""
     company = state["target_company"]
@@ -291,8 +369,32 @@ def contact_researcher_node(state):
             confidence="low",
         )
 
+    contact = result.model_dump()
+
+    # Hunter email enrichment as an additional verified-email provider.
+    hunter = _hunter_enrich(state)
+
+    if hunter:
+        if hunter.get("contact_email"):
+            contact["contact_email"] = hunter["contact_email"]
+            contact["email_source"] = hunter.get("email_source", "hunter")
+            contact["provider"] = "hunter"
+
+        if hunter.get("contact_name") and not contact.get("contact_name"):
+            contact["contact_name"] = hunter["contact_name"]
+
+        if hunter.get("title") and not contact.get("title"):
+            contact["title"] = hunter["title"]
+
+        print(
+            f"📬 Hunter: enriched contact for {company} "
+            f"({hunter.get('contact_email') or 'no email'})"
+        )
+    else:
+        print(f"📭 Hunter: no enrichment available for {company}")
+
     return {
-        "contact": result.model_dump()
+        "contact": contact
     }
 
 

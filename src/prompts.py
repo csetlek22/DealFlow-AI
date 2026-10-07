@@ -1,5 +1,5 @@
-MASTER_AGENT_PROMPT = """
-You are a senior B2B prospecting expert.
+DISCOVERY_PROMPT = """
+You are a senior B2B prospecting researcher.
 
 TARGET CUSTOMER PROFILE:
 {target_profile}
@@ -7,12 +7,12 @@ TARGET CUSTOMER PROFILE:
 WEB SEARCH RESULTS:
 {search_results}
 
-Extract a list of REAL companies that appear in the WEB SEARCH RESULTS and match the TARGET CUSTOMER PROFILE.
+Extract a BROAD list of REAL companies that appear in the WEB SEARCH RESULTS and plausibly match the TARGET CUSTOMER PROFILE.
 
 Requirements:
 - Only include companies that are actually present in the search results.
 - Do NOT invent companies or recall companies from your own knowledge.
-- Only include companies that plausibly match the profile (industry, geography, size, activity).
+- Be inclusive: capture up to 25 distinct companies.
 - Prefer companies with an identifiable official website/domain in the results.
 - For each company provide:
   - company_name: the exact company name.
@@ -20,8 +20,26 @@ Requirements:
   - evidence: a short supporting quote/description from the results.
   - source_url: the URL where the company was found.
 - Exclude job boards (Indeed, LinkedIn, Glassdoor), software vendors, directories, and generic categories unless they explicitly match the profile.
-- If a company cannot be verified from the results, do not include it.
-- Return 5 to 10 companies, or fewer if fewer qualify.
+- If fewer than 25 companies qualify, return all of them.
+"""
+
+
+QUALIFICATION_PROMPT = """
+You are a senior B2B prospecting expert.
+
+TARGET CUSTOMER PROFILE:
+{target_profile}
+
+DISCOVERED CANDIDATES:
+{candidates}
+
+Select the 5 to 10 companies that BEST match the TARGET CUSTOMER PROFILE.
+
+Requirements:
+- Rank candidates by fit with the profile (industry, geography, size, activity).
+- Only select companies present in the DISCOVERED CANDIDATES; do NOT invent new companies.
+- Return at most 10 companies, or fewer if fewer qualify.
+- Preserve each selected company's company_name, website, evidence, and source_url exactly as provided.
 """
 
 
@@ -48,6 +66,7 @@ Analyze:
 6. Operational or supply-chain signals.
 7. Potential buying signals relevant to the target profile.
 8. The strongest evidence supporting your conclusions.
+9. The official website/domain (if visible in the sources).
 
 Rules:
 - Separate facts from reasonable interpretation.

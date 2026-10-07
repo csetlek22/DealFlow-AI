@@ -24,6 +24,7 @@ class CompanyResearch(BaseModel):
     """Structured evidence collected about a company."""
 
     company_name: str
+    website: str | None = None
 
     industry: str | None = None
     business_model: str | None = None
@@ -115,6 +116,8 @@ class ContactResearch(BaseModel):
     title: str | None = None
     contact_email: str | None = None
     email_source: str | None = None
+    provider: str | None = None
+    evidence: str = ""
 
     rationale: str = ""
 

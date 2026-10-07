@@ -369,6 +369,7 @@ if st.session_state.batch_companies:
 
                         st.session_state[f"subject_{thread_id}"] = new_draft.get("subject", "")
                         st.session_state[f"body_{thread_id}"] = new_draft.get("body", "")
+                        st.session_state[f"feedback_{thread_id}"] = ""
 
                         st.rerun()
 
