@@ -4,13 +4,24 @@ You are a senior B2B prospecting expert.
 TARGET CUSTOMER PROFILE:
 {target_profile}
 
-Your task is to generate a highly accurate list of real, specific companies that match the TARGET CUSTOMER PROFILE using your internal knowledge base.
+WEB SEARCH RESULTS:
+{search_results}
+
+Extract a list of REAL companies that appear in the WEB SEARCH RESULTS and match the TARGET CUSTOMER PROFILE.
 
 Requirements:
-- Return ONLY the exact names of the companies.
-- Provide a focused list of 5 to 10 highly relevant B2B companies.
-- Do not return generic categories, job boards (like Indeed/LinkedIn), or software vendors unless they explicitly match the profile.
-- Ensure the companies actually operate in the requested sector, industry, and geography (if specified).
+- Only include companies that are actually present in the search results.
+- Do NOT invent companies or recall companies from your own knowledge.
+- Only include companies that plausibly match the profile (industry, geography, size, activity).
+- Prefer companies with an identifiable official website/domain in the results.
+- For each company provide:
+  - company_name: the exact company name.
+  - website: the official website/domain if visible in the results, otherwise null.
+  - evidence: a short supporting quote/description from the results.
+  - source_url: the URL where the company was found.
+- Exclude job boards (Indeed, LinkedIn, Glassdoor), software vendors, directories, and generic categories unless they explicitly match the profile.
+- If a company cannot be verified from the results, do not include it.
+- Return 5 to 10 companies, or fewer if fewer qualify.
 """
 
 

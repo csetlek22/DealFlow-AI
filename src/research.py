@@ -1,6 +1,12 @@
+import os
 import time
 from urllib.parse import urlsplit, urlunsplit
+
+import requests
 from ddgs import DDGS
+
+TAVILY_ENDPOINT = "https://api.tavily.com/search"
+
 
 def _clean_url(url: str) -> str:
     """Normalize URLs for duplicate detection."""
@@ -8,6 +14,7 @@ def _clean_url(url: str) -> str:
         return ""
     parsed = urlsplit(url)
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+
 
 def _normalize(result: dict, search_type: str) -> dict | None:
     """Convert DDGS results into a common structure."""
@@ -29,13 +36,73 @@ def _normalize(result: dict, search_type: str) -> dict | None:
         "type": search_type,
     }
 
-def search_queries(
+
+def _tavily_search(query: str, max_results: int = 5) -> list[dict]:
+    """Run a single Tavily search and normalize results into the common structure."""
+    api_key = os.getenv("TAVILY_API_KEY", "").strip()
+    if not api_key:
+        return []
+
+    try:
+        response = requests.post(
+            TAVILY_ENDPOINT,
+            json={
+                "api_key": api_key,
+                "query": query,
+                "max_results": max_results,
+                "search_depth": "basic",
+                "include_answer": False,
+                "include_raw_content": False,
+                "include_images": False,
+            },
+            timeout=20,
+        )
+        response.raise_for_status()
+        data = response.json()
+    except Exception as e:
+        print(f"Tavily search failed for '{query}': {e}")
+        return []
+
+    results = []
+    for item in data.get("results", []):
+        url = item.get("url", "")
+        if not url:
+            continue
+
+        results.append({
+            "title": (item.get("title") or "").strip(),
+            "body": (item.get("content") or "").strip(),
+            "url": url,
+            "date": "",
+            "source": urlsplit(url).netloc,
+            "type": "web",
+        })
+
+    return results
+
+
+def _tavily_search_queries(queries: list[str], max_results: int = 5) -> list[dict]:
+    """Run Tavily across multiple queries and deduplicate by URL."""
+    results = []
+    seen = set()
+
+    for query in queries:
+        for item in _tavily_search(query, max_results=max_results):
+            key = _clean_url(item["url"])
+            if key and key not in seen:
+                seen.add(key)
+                results.append(item)
+
+    return results
+
+
+def _ddgs_search_queries(
     queries: list[str],
     max_results: int = 10,
     include_news: bool = True,
     news_queries: list[str] | None = None,
 ) -> list[dict]:
-    """Run web searches with limited supplementary news queries and rate-limit protection."""
+    """DDGS fallback search (preserves the original DuckDuckGo behavior)."""
     results = []
     seen = set()
     news_queries = news_queries or []
@@ -54,8 +121,7 @@ def search_queries(
                                 results.append(result)
             except Exception as e:
                 print(f"Web search failed for '{query}': {e}")
-            
-            # KRİTİK EKLENTİ: DDG'nin IP'mizi bloklamaması için 2 saniye bekliyoruz
+
             time.sleep(1)
 
         if include_news and hasattr(ddgs, "news"):
@@ -72,43 +138,90 @@ def search_queries(
                                     results.append(result)
                 except Exception as e:
                     print(f"News search failed for '{query}': {e}")
-                
-                # KRİTİK EKLENTİ: Haber aramaları arasında da 2 saniye bekle
+
                 time.sleep(2)
 
     return results
 
+
+def search_queries(
+    queries: list[str],
+    max_results: int = 10,
+    include_news: bool = True,
+    news_queries: list[str] | None = None,
+) -> list[dict]:
+    """Run web searches using Tavily (primary) with DDGS fallback (optional)."""
+    news_queries = news_queries or []
+
+    # Tavily is the primary provider. Fall back to DDGS when the key is
+    # missing or Tavily returns no useful results.
+    if os.getenv("TAVILY_API_KEY", "").strip():
+        combined = list(queries)
+        if include_news:
+            combined.extend(news_queries)
+
+        results = _tavily_search_queries(combined, max_results=max_results)
+        if results:
+            return results
+
+    return _ddgs_search_queries(
+        queries,
+        max_results=max_results,
+        include_news=include_news,
+        news_queries=news_queries,
+    )
+
+
+def _discovery_queries(profile: str) -> list[str]:
+    """Build focused discovery queries from the target profile."""
+    compact = " ".join(profile.split())
+    icp = compact
+
+    lowered = compact.lower()
+    for marker in ("ideal customers are", "target companies", "companies that"):
+        idx = lowered.find(marker)
+        if idx != -1:
+            icp = compact[idx:]
+            break
+
+    base = icp if len(icp) <= 220 else icp[:220]
+
+    return [
+        base,
+        f"{base} companies",
+        f"{base} hiring OR expansion OR growth",
+    ]
+
+
 def search_target_companies(
     target_profile: str,
-    max_results_per_query: int = 4,
+    max_results_per_query: int = 6,
 ) -> list[dict]:
-    """Find companies matching the target customer profile."""
-    # KORUMA: Eğer kullanıcı arayüzden 60 karakterden uzun bir paragraf (prompt) girdiyse, 
-    # arama motorunun çökmemesi için temiz ve güvenli bir anahtar kelime kümesi kullan.
-    clean_query = target_profile
-    if len(target_profile) > 60:
-        clean_query = "growing logistics and manufacturing companies"
+    """Find real candidate companies matching the target profile via web search."""
+    profile = target_profile.strip()
+    if not profile:
+        return []
 
-    queries = [
-        f"{clean_query}",
-        f"{clean_query} hiring",
-    ]
+    queries = _discovery_queries(profile)
 
     return search_queries(
         queries,
         max_results=max_results_per_query,
-        include_news=False, 
+        include_news=False,
     )
+
 
 def search_company(
     company: str,
-    max_results_per_query: int = 4,
+    max_results_per_query: int = 5,
 ) -> list[dict]:
-    """Research company identity, growth, hiring and operations."""
-    # OPTİMİZASYON: 7 farklı sorgu atmak yerine kapsamlı 2 sorguya indirildi.
+    """Research company identity, growth, hiring, leadership and operations."""
     queries = [
-        f"{company} company profile operations",
-        f"{company} recent news hiring",
+        f"{company} company profile overview",
+        f"{company} recent news",
+        f"{company} hiring careers jobs",
+        f"{company} leadership team executives",
+        f"{company} operations expansion facilities supply chain",
     ]
 
     news_queries = [
@@ -122,30 +235,35 @@ def search_company(
         news_queries=news_queries,
     )
 
+
 def search_contact(
     company: str,
     analysis: dict | None = None,
-    max_results_per_query: int = 3,
+    max_results_per_query: int = 4,
 ) -> list[dict]:
-    """Find publicly available decision-maker information."""
+    """Find publicly available decision-maker and email information."""
     analysis = analysis or {}
     signal = analysis.get("signal", "")
 
     queries = [
-        f"{company} leadership OR operations team",
+        f"{company} leadership team",
+        f"{company} contact email address",
     ]
 
     if signal:
-        # Sinyal metninin motoru çökertmemesi için sadece ilk 3 kelimesini alıyoruz
-        short_signal = " ".join(signal.replace('"', '').split()[:3])
+        # Keep the signal concise so it stays a clean search term.
+        short_signal = " ".join(signal.replace('"', '').split()[:5])
         if short_signal:
-            queries.append(f"{company} {short_signal} executive")
+            queries.append(
+                f"{company} {short_signal} director OR head OR executive"
+            )
 
     return search_queries(
         queries,
         max_results=max_results_per_query,
         include_news=False,
     )
+
 
 def format_search_results(
     results: list[dict],
@@ -172,6 +290,7 @@ def format_search_results(
         total += len(section)
 
     return "\n".join(sections)
+
 
 def get_source_urls(results: list[dict]) -> list[str]:
     """Return unique source URLs."""

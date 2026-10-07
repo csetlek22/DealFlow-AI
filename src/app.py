@@ -90,6 +90,7 @@ if st.button("🔎 Start Batch Sourcing", use_container_width=True):
                     "contact": {},
                     "draft_email": {},
                     "human_feedback": "",
+                    "approved": False,
                     "crm_page_id": "",
                     "final_status": "",
                 }
@@ -244,12 +245,31 @@ if st.session_state.batch_companies:
                 height=90,
             )
 
+            approved = bool(state.get("approved"))
+
+            if not approved:
+                if st.button(
+                    "✅ Approve Lead",
+                    key=f"approve_{thread_id}",
+                    use_container_width=True,
+                ):
+                    try:
+                        app.update_state(
+                            config,
+                            {"approved": True},
+                            as_node="Human_Approval",
+                        )
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Approval failed: {e}")
+
             c1, c2, c3 = st.columns(3)
 
             if c1.button(
                 "💾 Save to CRM",
                 key=f"save_{thread_id}",
                 use_container_width=True,
+                disabled=not approved,
             ):
                 if not email_subject.strip() or not email_body.strip():
                     st.warning("Subject and email body are required.")
@@ -281,6 +301,7 @@ if st.session_state.batch_companies:
                 "📨 Save & Send",
                 key=f"send_{thread_id}",
                 use_container_width=True,
+                disabled=not approved,
             ):
                 if not recipient.strip():
                     st.error("Enter a recipient email first.")
@@ -340,6 +361,14 @@ if st.session_state.batch_companies:
 
                         for _ in app.stream(None, config):
                             pass
+
+                        # Refresh the widgets so the rewritten subject/body
+                        # appear immediately instead of the previous draft.
+                        new_state = app.get_state(config).values
+                        new_draft = new_state.get("draft_email") or {}
+
+                        st.session_state[f"subject_{thread_id}"] = new_draft.get("subject", "")
+                        st.session_state[f"body_{thread_id}"] = new_draft.get("body", "")
 
                         st.rerun()
 

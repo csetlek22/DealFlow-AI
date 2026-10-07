@@ -11,7 +11,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from notion_client import Client
 
 from schemas import (
-    LeadList,
+    CompanyCandidateList,
     CompanyResearch,
     LeadAnalysis,
     ContactResearch,
@@ -85,6 +85,7 @@ class AgentState(TypedDict, total=False):
     contact: dict
     draft_email: dict
     human_feedback: str
+    approved: bool
     crm_page_id: str
     final_status: str
 
@@ -119,27 +120,42 @@ def _clean_companies(companies):
 
 
 def generate_leads(target_profile):
-    """Discover companies matching the user's target profile using LLM's internal knowledge."""
+    """Discover real companies via Tavily and qualify them against the profile."""
     profile = target_profile.strip() or DEFAULT_PROFILE
 
-    print(f"🌍 Master Agent: Brainstorming companies matching '{profile}' from internal knowledge...")
+    print("🌍 Master Agent: Searching the web for matching companies...")
+
+    results = search_target_companies(profile)
+
+    context = format_search_results(
+        results,
+        max_chars=20000,
+    )
+
+    if not context.strip():
+        print("Master Agent: no search results found.")
+        return []
 
     try:
-        # DDGS araması ve format_search_results tamamen kaldırıldı.
-        # Sadece Gemini'nin kendi bilgisi kullanılarak liste isteniyor.
-        result = llm.with_structured_output(
-            LeadList
+        candidates = llm.with_structured_output(
+            CompanyCandidateList
         ).invoke(
             MASTER_AGENT_PROMPT.format(
-                target_profile=profile
+                target_profile=profile,
+                search_results=context,
             )
         )
 
-        return _clean_companies(result.companies)
+        companies = [
+            candidate.company_name
+            for candidate in candidates.candidates
+        ]
 
     except Exception as e:
         print(f"Lead generation error: {e}")
         return []
+
+    return _clean_companies(companies)
 
 
 def researcher_node(state):

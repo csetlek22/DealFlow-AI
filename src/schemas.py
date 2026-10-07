@@ -3,10 +3,19 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
-class LeadList(BaseModel):
-    """Companies identified as potential prospects."""
+class CompanyCandidate(BaseModel):
+    """A real company candidate extracted from web search results."""
 
-    companies: list[str] = Field(
+    company_name: str
+    website: str | None = None
+    evidence: str = ""
+    source_url: str = ""
+
+
+class CompanyCandidateList(BaseModel):
+    """Candidate companies discovered via web search."""
+
+    candidates: list[CompanyCandidate] = Field(
         default_factory=list
     )
 
