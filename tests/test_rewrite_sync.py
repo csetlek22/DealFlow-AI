@@ -27,11 +27,11 @@ class FakeGraphApp:
     def __init__(self):
         self.state = {
             "analysis": {
-                "fit_score": 5,
-                "icp_score": 2,
+                "fit_score": 7,
+                "icp_score": 3,
                 "business_need_score": 2,
                 "recency_score": 1,
-                "signal_strength_score": 0,
+                "signal_strength_score": 1,
                 "signal": "hiring",
                 "rationale": "growing",
                 "signal_category": "hiring",
@@ -80,7 +80,7 @@ def main():
     orchestrator.app = FakeGraphApp()
     orchestrator.AgentState = dict
     orchestrator.generate_leads = lambda profile: ["Acme Co"]
-    orchestrator.QUALIFIED_SCORE = 2
+    orchestrator.QUALIFIED_SCORE = 6
 
     def fake_crm_node(state):
         crm_received.append(state)

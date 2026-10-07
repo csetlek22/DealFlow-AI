@@ -64,7 +64,8 @@ llm = ChatGoogleGenerativeAI(
 
 notion = Client(auth=NOTION_TOKEN)
 
-QUALIFIED_SCORE = 2
+# Companies with a fit_score at or above this value are considered qualified.
+QUALIFIED_SCORE = 6
 MAX_COMPANIES = 12
 
 DEFAULT_PROFILE = """
@@ -258,7 +259,7 @@ def generate_leads(target_profile):
         existing_names, existing_domains = get_existing_crm_companies()
     except Exception as e:
         print(
-            f"❌ Notion CRM lookup failed: {type(e).__name__}: {e} — "
+            f"Notion CRM lookup failed: {type(e).__name__}: {e} — "
             "skipping batch (fail-safe)."
         )
         return []
@@ -268,9 +269,9 @@ def generate_leads(target_profile):
         for name in existing_names
     }
 
-    print(f"📒 Existing CRM companies loaded: {len(existing_names)}")
+    print(f"Existing CRM companies loaded: {len(existing_names)}")
 
-    print("🌍 Master Agent: Discovering candidate companies via Tavily...")
+    print("Master Agent: Discovering candidate companies via Tavily...")
 
     results = search_target_companies(
         profile,
@@ -305,7 +306,7 @@ def generate_leads(target_profile):
         print(f"Discovery error: {e}")
         return []
 
-    print(f"🔎 Discovery candidates: {len(candidates)}")
+    print(f"Discovery candidates: {len(candidates)}")
 
     if not candidates:
         print("Master Agent: no candidates discovered.")
@@ -320,13 +321,13 @@ def generate_leads(target_profile):
     if excluded:
         preview = ", ".join(excluded[:5])
         suffix = "..." if len(excluded) > 5 else ""
-        print(f"🚫 Excluded as existing ({len(excluded)}): {preview}{suffix}")
+        print(f"Excluded as existing ({len(excluded)}): {preview}{suffix}")
 
     if not candidates:
         print("Master Agent: all candidates already exist in CRM.")
         return []
 
-    print(f"🧪 Candidates sent to Gemini: {len(candidates)}")
+    print(f"Candidates sent to Gemini: {len(candidates)}")
 
     try:
         qualified = llm.with_structured_output(
@@ -361,7 +362,7 @@ def generate_leads(target_profile):
         if _normalize_company_name(company) not in existing_set
     ]
 
-    print(f"🎯 Qualified companies: {len(companies)}")
+    print(f"Qualified companies: {len(companies)}")
     return companies
 
 
@@ -533,11 +534,11 @@ def contact_researcher_node(state):
             contact["title"] = hunter["title"]
 
         print(
-            f"📬 Hunter: enriched contact for {company} "
+            f"Hunter: enriched contact for {company} "
             f"({hunter.get('contact_email') or 'no email'})"
         )
     else:
-        print(f"📭 Hunter: no enrichment available for {company}")
+        print(f"Hunter: no enrichment available for {company}")
 
     return {
         "contact": contact
@@ -546,12 +547,13 @@ def contact_researcher_node(state):
 
 def copywriter_node(state):
     """Generate or revise the personalized outbound email."""
-    print(f"✍️ Copywriter Agent: Drafting email for {state.get('target_company', 'Unknown')}...")
+    print(f"Copywriter Agent: Drafting email for {state.get('target_company', 'Unknown')}...")
     
     existing_draft = state.get("draft_email") or {}
     feedback = state.get("human_feedback", "").strip()
 
-    # LLM'in boş "{}" objesi görüp halüsinasyon yapmasını engellemek için net yönlendirmeler:
+    # Use explicit prose instead of an empty dict so the model writes a fresh
+    # draft rather than hallucinating content.
     draft_text = "No existing draft. Write a new email from scratch."
     if existing_draft.get("body"):
         draft_text = f"Subject: {existing_draft.get('subject', '')}\nBody: {existing_draft.get('body', '')}"
@@ -571,8 +573,8 @@ def copywriter_node(state):
                 analysis=_json(state.get("analysis")),
                 contact=_json(state.get("contact")),
                 company_research=_json(state.get("company_research")),
-                existing_draft=draft_text,      # Boş JSON yerine net metin
-                human_feedback=feedback_text,   # Boş JSON yerine net metin
+                existing_draft=draft_text,
+                human_feedback=feedback_text,
             )
         )
 
@@ -628,14 +630,14 @@ def _blocks(state, updated=False):
     return blocks
 
 def crm_node(state):
-    """Create or update the lead's Notion CRM record using the solid V7 logic."""
-    print(f"💾 CRM Agent: Saving {state.get('target_company')} to database...")
+    """Create or update the lead's Notion CRM record."""
+    print(f"CRM Agent: Saving {state.get('target_company')} to database...")
     
     analysis = state.get("analysis") or {}
     draft = state.get("draft_email") or {}
     company_name = analysis.get("company_name") or state.get("target_company") or "Unknown"
 
-    # V7'deki tıkır tıkır çalışan statik eşleştirme
+    # Map lead fields to the Notion database properties.
     properties = {
         "Company": {"title": _rt(company_name)},
         "Fit Score": {"number": int(analysis.get("fit_score", 0))},
@@ -679,11 +681,11 @@ def route_after_analysis(state):
     if score >= QUALIFIED_SCORE:
         return "ContactResearcher"
 
-    # Düşük puanlılar artık otomatik CRM'e KAYDEDİLMEYECEK, grafik bitecek.
+    # Leads below the threshold stop here; nothing is written to the CRM.
     return END
 
 def route_after_human(state):
-    """Rewrite when feedback exists; otherwise save to CRM."""
+    """Return to the copywriter when feedback exists; otherwise end the run."""
     feedback = state.get(
         "human_feedback",
         "",
@@ -692,7 +694,7 @@ def route_after_human(state):
     if feedback.strip():
         return "Copywriter"
 
-    # Grafik burada duracak. CRM kaydı sadece app_8.py'den manuel yapılacak.
+    # Stop here; the CRM write is a manual action in the UI after approval.
     return END
 
 

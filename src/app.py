@@ -357,7 +357,7 @@ if st.session_state.batch_companies:
                             as_node="Human_Approval",
                         )
 
-                        # V7'DEKİ KESİN ÇALIŞAN MANTIK: Grafiği ilerletmeden manuel CRM kaydı
+                        # Save the lead to CRM directly from the approved state (the CRM write is a manual action here, not a graph node).
                         current_state = app.get_state(config).values
                         crm_node(current_state)
 
@@ -398,7 +398,7 @@ if st.session_state.batch_companies:
                             as_node="Human_Approval",
                         )
 
-                        # Manuel CRM Kaydı
+                        # Save the lead to CRM after the email is sent.
                         current_state = app.get_state(config).values
                         crm_node(current_state)
 
