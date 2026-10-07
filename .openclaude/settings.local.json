@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m py_compile src/research.py src/orchestrator.py src/app.py src/schemas.py)",
+      "Bash(python -c \"import os, dotenv; dotenv.load_dotenv\\(''.env''\\); keys=[''GOOGLE_API_KEY'',''NOTION_TOKEN'',''NOTION_DATABASE_ID'',''SENDER_EMAIL'',''sender_email'',''SENDER_PASSWORD'',''sender_password'']; print\\({k: bool\\(os.getenv\\(k\\)\\) for k in keys}\\)\")",
+      "Bash(python -c \":*)",
+      "Bash(\"../.venv/Scripts/python.exe\" -c \":*)",
+      "Bash(\"../ai_agent/Scripts/python.exe\" -c \":*)",
+      "Bash(ai_agent/Scripts/python.exe -c \"import streamlit as st; print\\(''streamlit'', st.__version__\\); import inspect; print\\(''button has disabled:'', ''disabled'' in inspect.signature\\(st.button\\).parameters\\)\")",
+      "Bash(ai_agent/Scripts/python.exe -c \"import importlib.util as u; print\\(''tavily:'', u.find_spec\\(''tavily''\\) is not None\\); print\\(''requests:'', u.find_spec\\(''requests''\\) is not None\\); print\\(''ddgs:'', u.find_spec\\(''ddgs''\\) is not None\\)\")",
+      "Bash(ai_agent/Scripts/python.exe -m py_compile src/research.py src/orchestrator.py src/schemas.py src/prompts.py src/app.py)",
+      "Bash(../ai_agent/Scripts/python.exe -:*)",
+      "Bash(PYTHONUTF8=1 ../ai_agent/Scripts/python.exe - <<'PYEOF':*)",
+      "Bash(PYTHONUTF8=1 ../ai_agent/Scripts/python.exe -c \":*)"
+    ]
+  }
+}
