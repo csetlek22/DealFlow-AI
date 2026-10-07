@@ -50,6 +50,8 @@ def enrich_email(domain, api_key=None):
     if not emails:
         return None
 
+    # Rank candidates: prefer personal (non-generic) addresses, higher Hunter
+    # confidence, and entries that include a full name.
     best = None
     best_score = -1
 

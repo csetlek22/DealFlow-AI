@@ -1,14 +1,12 @@
 """Regression tests for Notion duplicate-company filtering.
 
-Covers the actual failure mode that broke Start Batch Sourcing: the app is on
-notion-client 3.x, where ``databases.query`` was removed and replaced by
-``data_sources.query``. The first implementation called the removed method,
-raising AttributeError, which ``generate_leads`` swallowed and turned into an
-empty result ("No suitable companies were found.").
+These tests verify the notion-client 3.x data-source read path, fail-safe
+behavior when the CRM is unreachable, and exclusion of companies already
+present in the CRM (including the final post-qualification safety check).
 
-These tests are hermetic: they never touch the network and never import the
-Streamlit app. They exercise the real ``orchestrator`` module with a fake Notion
-client and fake LLM/search functions.
+They are hermetic: no network access and no Streamlit import. They exercise the
+real ``orchestrator`` module with a fake Notion client and fake LLM/search
+functions.
 """
 
 import io
@@ -154,8 +152,8 @@ def test_generate_leads_excludes_existing_and_returns_new():
         ]
     )
 
-    # The LLM "hallucinates" Acme Corp back into the qualified list, so the
-    # final safety check must still drop it.
+    # The qualification step returns Acme Corp again, so the final safety
+    # check must still drop it.
     qualification = CompanyCandidateList(
         candidates=[
             CompanyCandidate(company_name="Acme Corp"),

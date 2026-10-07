@@ -144,7 +144,13 @@ def _clean_candidates(candidates, limit=25):
 
 
 def _normalize_company_name(value):
-    """Lowercase, strip punctuation and collapse whitespace for matching."""
+    """Normalize a name for exact duplicate matching.
+
+    Lowercasing and stripping punctuation collapse formatting differences
+    (case, commas, periods) so the same company written differently still
+    matches. Matching is intentionally exact rather than fuzzy to avoid false
+    positives against the CRM.
+    """
     value = (value or "").strip().lower()
     value = re.sub(r"[^\w\s]", " ", value, flags=re.UNICODE)
     value = re.sub(r"\s+", " ", value)
@@ -156,6 +162,8 @@ def get_existing_crm_companies():
     if not NOTION_DATABASE_ID:
         raise ValueError("NOTION_DATABASE_ID is missing.")
 
+    # notion-client 3.x removed ``databases.query``; CRM pages are read from
+    # the database's linked data source instead.
     database = notion.databases.retrieve(database_id=NOTION_DATABASE_ID)
     data_sources = database.get("data_sources") or []
 
@@ -225,7 +233,11 @@ def get_existing_crm_companies():
 
 
 def _filter_existing(candidates, existing_names, existing_domains):
-    """Split candidates into new (kept) and already-in-CRM (excluded)."""
+    """Split candidates into new (kept) and already-in-CRM (excluded).
+
+    An exact normalized name match is the primary duplicate signal; a domain
+    match is a secondary check that catches renames and alternate spellings.
+    """
     existing = {
         _normalize_company_name(name)
         for name in existing_names
@@ -601,7 +613,7 @@ def copywriter_node(state):
 
 
 def _rt(value, limit=1900):
-    """Create a Notion-safe rich-text value."""
+    """Return a Notion rich-text value, truncated to avoid the block-size cap."""
     value = str(value or "")
     return [{"text": {"content": value[:limit]}}]
 
@@ -778,6 +790,8 @@ connection = sqlite3.connect(
 
 checkpointer = SqliteSaver(connection)
 
+# Interrupt before Human_Approval so nothing reaches the CRM or email until a
+# human explicitly approves the lead in the UI.
 app = workflow.compile(
     checkpointer=checkpointer,
     interrupt_before=["Human_Approval"],

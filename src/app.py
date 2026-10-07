@@ -271,11 +271,11 @@ if st.session_state.batch_companies:
 
             st.write("### Email")
 
-            # The keyed widgets are the single source of truth for the editable
-            # draft. Seed them from the authoritative checkpoint on first render,
-            # and after a Rewrite copy the freshly generated draft in (before the
-            # widgets are instantiated, since Streamlit forbids setting widget
-            # keys after the widget is created).
+            # The LangGraph checkpoint is the authoritative source of truth for
+            # the draft. The keyed widgets mirror it: seed them on first render,
+            # and after a Rewrite copy the freshly generated draft into the
+            # widget keys before the widgets are instantiated (Streamlit forbids
+            # writing a widget key after that widget has been created).
             if st.session_state.pop(f"rewrite_sync_{thread_id}", False):
                 st.session_state[f"subject_{thread_id}"] = draft.get("subject", "")
                 st.session_state[f"body_{thread_id}"] = draft.get("body", "")
