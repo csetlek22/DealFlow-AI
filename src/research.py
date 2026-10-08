@@ -102,7 +102,12 @@ def _ddgs_search_queries(
     include_news: bool = True,
     news_queries: list[str] | None = None,
 ) -> list[dict]:
-    """DDGS fallback search (preserves the original DuckDuckGo behavior)."""
+    """Run DuckDuckGo searches across queries and deduplicate by URL.
+
+    Used as the fallback provider when Tavily is unavailable or returns no
+    results. When ``include_news`` is set, a separate news-only pass runs over
+    ``news_queries``.
+    """
     results = []
     seen = set()
     news_queries = news_queries or []
@@ -177,6 +182,9 @@ def _discovery_queries(profile: str) -> list[str]:
     compact = " ".join(profile.split())
     icp = compact
 
+    # If the profile opens with an "ideal customers are ..." lead-in, search
+    # only from that point onward so the query describes the target rather
+    # than the surrounding instructions.
     lowered = compact.lower()
     for marker in ("ideal customers are", "target companies", "companies that"):
         idx = lowered.find(marker)

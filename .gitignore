@@ -1,18 +1,19 @@
-# Environments
+# Environment / secrets
 .env
 .venv/
 env/
 venv/
 
-# Database (Kullanıcı verilerinin GitHub'a gitmemesi için)
+# Local SQLite state (checkpoint and CRM data must not be committed)
 state.db
+*.db
+*.db-shm
+*.db-wal
 
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
 
-# Database (Kullanıcı verilerinin ve geçici SQLite dosyalarının GitHub'a gitmemesi için)
-*.db
-*.db-shm
-*.db-wal
+# Local tooling configuration
+.openclaude/

@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sqlite3
 from pathlib import Path
 from typing import TypedDict
@@ -63,7 +64,8 @@ llm = ChatGoogleGenerativeAI(
 
 notion = Client(auth=NOTION_TOKEN)
 
-QUALIFIED_SCORE = 2
+# Companies with a fit_score at or above this value are considered qualified.
+QUALIFIED_SCORE = 6
 MAX_COMPANIES = 12
 
 DEFAULT_PROFILE = """
@@ -141,11 +143,147 @@ def _clean_candidates(candidates, limit=25):
     return result[:limit]
 
 
+def _normalize_company_name(value):
+    """Normalize a name for exact duplicate matching.
+
+    Lowercasing and stripping punctuation collapse formatting differences
+    (case, commas, periods) so the same company written differently still
+    matches. Matching is intentionally exact rather than fuzzy to avoid false
+    positives against the CRM.
+    """
+    value = (value or "").strip().lower()
+    value = re.sub(r"[^\w\s]", " ", value, flags=re.UNICODE)
+    value = re.sub(r"\s+", " ", value)
+    return value.strip()
+
+
+def get_existing_crm_companies():
+    """Return (names, domains) already present in the Notion CRM database."""
+    if not NOTION_DATABASE_ID:
+        raise ValueError("NOTION_DATABASE_ID is missing.")
+
+    # notion-client 3.x removed ``databases.query``; CRM pages are read from
+    # the database's linked data source instead.
+    database = notion.databases.retrieve(database_id=NOTION_DATABASE_ID)
+    data_sources = database.get("data_sources") or []
+
+    if not data_sources:
+        raise ValueError("Notion database has no linked data source.")
+
+    names = set()
+    domains = set()
+    cursor = None
+
+    while True:
+        params = {
+            "data_source_id": data_sources[0]["id"],
+            "page_size": 100,
+        }
+
+        if cursor:
+            params["start_cursor"] = cursor
+
+        response = notion.data_sources.query(**params)
+
+        for page in response.get("results", []):
+            properties = page.get("properties") or {}
+
+            title_blocks = (properties.get("Company") or {}).get("title") or []
+
+            name = "".join(
+                block.get("plain_text", "")
+                for block in title_blocks
+            ).strip()
+
+            if name:
+                names.add(name)
+
+                # A name that is itself a URL/domain is also a domain hint.
+                name_domain = _extract_domain(name)
+
+                if (
+                    name_domain
+                    and "." in name_domain
+                    and " " not in name_domain
+                ):
+                    domains.add(name_domain)
+
+            # "Contact Email" is the only domain-bearing property the CRM stores.
+            email = (properties.get("Contact Email") or {}).get("email")
+
+            if email and "@" in email:
+                email_domain = email.rsplit("@", 1)[-1].lower().strip()
+
+                if (
+                    email_domain
+                    and "." in email_domain
+                    and " " not in email_domain
+                ):
+                    domains.add(email_domain)
+
+        if not response.get("has_more"):
+            break
+
+        cursor = response.get("next_cursor")
+
+        if not cursor:
+            break
+
+    return names, domains
+
+
+def _filter_existing(candidates, existing_names, existing_domains):
+    """Split candidates into new (kept) and already-in-CRM (excluded).
+
+    An exact normalized name match is the primary duplicate signal; a domain
+    match is a secondary check that catches renames and alternate spellings.
+    """
+    existing = {
+        _normalize_company_name(name)
+        for name in existing_names
+    }
+
+    kept = []
+    excluded = []
+
+    for candidate in candidates:
+        name_key = _normalize_company_name(candidate.company_name)
+        domain = _extract_domain(candidate.website) if candidate.website else ""
+
+        if (
+            (name_key and name_key in existing)
+            or (domain and domain in existing_domains)
+        ):
+            excluded.append(candidate.company_name)
+        else:
+            kept.append(candidate)
+
+    return kept, excluded
+
+
 def generate_leads(target_profile):
-    """Discover candidates via Tavily, then qualify them against the profile."""
+    """Discover candidates via Tavily, filter out CRM duplicates, then qualify."""
     profile = target_profile.strip() or DEFAULT_PROFILE
 
-    print("🌍 Master Agent: Discovering candidate companies via Tavily...")
+    # Load existing CRM companies once. If we can't read them, fail safe (skip
+    # the batch) so we never risk surfacing a company already in the CRM.
+    try:
+        existing_names, existing_domains = get_existing_crm_companies()
+    except Exception as e:
+        print(
+            f"Notion CRM lookup failed: {type(e).__name__}: {e} — "
+            "skipping batch (fail-safe)."
+        )
+        return []
+
+    existing_set = {
+        _normalize_company_name(name)
+        for name in existing_names
+    }
+
+    print(f"Existing CRM companies loaded: {len(existing_names)}")
+
+    print("Master Agent: Discovering candidate companies via Tavily...")
 
     results = search_target_companies(
         profile,
@@ -180,14 +318,28 @@ def generate_leads(target_profile):
         print(f"Discovery error: {e}")
         return []
 
+    print(f"Discovery candidates: {len(candidates)}")
+
     if not candidates:
         print("Master Agent: no candidates discovered.")
         return []
 
-    print(
-        f"Master Agent: {len(candidates)} candidates discovered. "
-        "Qualifying..."
+    candidates, excluded = _filter_existing(
+        candidates,
+        existing_names,
+        existing_domains,
     )
+
+    if excluded:
+        preview = ", ".join(excluded[:5])
+        suffix = "..." if len(excluded) > 5 else ""
+        print(f"Excluded as existing ({len(excluded)}): {preview}{suffix}")
+
+    if not candidates:
+        print("Master Agent: all candidates already exist in CRM.")
+        return []
+
+    print(f"Candidates sent to Gemini: {len(candidates)}")
 
     try:
         qualified = llm.with_structured_output(
@@ -215,7 +367,14 @@ def generate_leads(target_profile):
 
     companies = _clean_companies(companies)
 
-    print(f"Master Agent: {len(companies)} companies qualified.")
+    # Final safety check: never return a company already in the CRM.
+    companies = [
+        company
+        for company in companies
+        if _normalize_company_name(company) not in existing_set
+    ]
+
+    print(f"Qualified companies: {len(companies)}")
     return companies
 
 
@@ -387,11 +546,11 @@ def contact_researcher_node(state):
             contact["title"] = hunter["title"]
 
         print(
-            f"📬 Hunter: enriched contact for {company} "
+            f"Hunter: enriched contact for {company} "
             f"({hunter.get('contact_email') or 'no email'})"
         )
     else:
-        print(f"📭 Hunter: no enrichment available for {company}")
+        print(f"Hunter: no enrichment available for {company}")
 
     return {
         "contact": contact
@@ -400,12 +559,13 @@ def contact_researcher_node(state):
 
 def copywriter_node(state):
     """Generate or revise the personalized outbound email."""
-    print(f"✍️ Copywriter Agent: Drafting email for {state.get('target_company', 'Unknown')}...")
+    print(f"Copywriter Agent: Drafting email for {state.get('target_company', 'Unknown')}...")
     
     existing_draft = state.get("draft_email") or {}
     feedback = state.get("human_feedback", "").strip()
 
-    # LLM'in boş "{}" objesi görüp halüsinasyon yapmasını engellemek için net yönlendirmeler:
+    # Use explicit prose instead of an empty dict so the model writes a fresh
+    # draft rather than hallucinating content.
     draft_text = "No existing draft. Write a new email from scratch."
     if existing_draft.get("body"):
         draft_text = f"Subject: {existing_draft.get('subject', '')}\nBody: {existing_draft.get('body', '')}"
@@ -425,8 +585,8 @@ def copywriter_node(state):
                 analysis=_json(state.get("analysis")),
                 contact=_json(state.get("contact")),
                 company_research=_json(state.get("company_research")),
-                existing_draft=draft_text,      # Boş JSON yerine net metin
-                human_feedback=feedback_text,   # Boş JSON yerine net metin
+                existing_draft=draft_text,
+                human_feedback=feedback_text,
             )
         )
 
@@ -453,7 +613,7 @@ def copywriter_node(state):
 
 
 def _rt(value, limit=1900):
-    """Create a Notion-safe rich-text value."""
+    """Return a Notion rich-text value, truncated to avoid the block-size cap."""
     value = str(value or "")
     return [{"text": {"content": value[:limit]}}]
 
@@ -482,14 +642,14 @@ def _blocks(state, updated=False):
     return blocks
 
 def crm_node(state):
-    """Create or update the lead's Notion CRM record using the solid V7 logic."""
-    print(f"💾 CRM Agent: Saving {state.get('target_company')} to database...")
+    """Create or update the lead's Notion CRM record."""
+    print(f"CRM Agent: Saving {state.get('target_company')} to database...")
     
     analysis = state.get("analysis") or {}
     draft = state.get("draft_email") or {}
     company_name = analysis.get("company_name") or state.get("target_company") or "Unknown"
 
-    # V7'deki tıkır tıkır çalışan statik eşleştirme
+    # Map lead fields to the Notion database properties.
     properties = {
         "Company": {"title": _rt(company_name)},
         "Fit Score": {"number": int(analysis.get("fit_score", 0))},
@@ -533,11 +693,11 @@ def route_after_analysis(state):
     if score >= QUALIFIED_SCORE:
         return "ContactResearcher"
 
-    # Düşük puanlılar artık otomatik CRM'e KAYDEDİLMEYECEK, grafik bitecek.
+    # Leads below the threshold stop here; nothing is written to the CRM.
     return END
 
 def route_after_human(state):
-    """Rewrite when feedback exists; otherwise save to CRM."""
+    """Return to the copywriter when feedback exists; otherwise end the run."""
     feedback = state.get(
         "human_feedback",
         "",
@@ -546,7 +706,7 @@ def route_after_human(state):
     if feedback.strip():
         return "Copywriter"
 
-    # Grafik burada duracak. CRM kaydı sadece app_8.py'den manuel yapılacak.
+    # Stop here; the CRM write is a manual action in the UI after approval.
     return END
 
 
@@ -630,6 +790,8 @@ connection = sqlite3.connect(
 
 checkpointer = SqliteSaver(connection)
 
+# Interrupt before Human_Approval so nothing reaches the CRM or email until a
+# human explicitly approves the lead in the UI.
 app = workflow.compile(
     checkpointer=checkpointer,
     interrupt_before=["Human_Approval"],
