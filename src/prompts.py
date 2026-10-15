@@ -7,7 +7,7 @@ TARGET CUSTOMER PROFILE:
 WEB SEARCH RESULTS:
 {search_results}
 
-Extract a BROAD list of REAL companies that appear in the WEB SEARCH RESULTS and plausibly match the TARGET CUSTOMER PROFILE.
+Extract a very BROAD list of REAL companies that appear in the WEB SEARCH RESULTS and plausibly match the TARGET CUSTOMER PROFILE.
 
 Requirements:
 - Only include companies that are actually present in the search results.
@@ -20,7 +20,7 @@ Requirements:
   - evidence: a short supporting quote/description from the results.
   - source_url: the URL where the company was found.
 - Exclude job boards (Indeed, LinkedIn, Glassdoor), software vendors, directories, and generic categories unless they explicitly match the profile.
-- If fewer than 25 companies qualify, return all of them.
+- If fewer than 50 companies qualify, return all of them.
 """
 
 
@@ -33,7 +33,7 @@ TARGET CUSTOMER PROFILE:
 DISCOVERED CANDIDATES:
 {candidates}
 
-Select the 5 to 10 companies that BEST match the TARGET CUSTOMER PROFILE.
+Select all companies that match the TARGET CUSTOMER PROFILE.
 
 Requirements:
 - Rank candidates by fit with the profile (industry, geography, size, activity).
