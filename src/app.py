@@ -2,6 +2,7 @@ import re
 import uuid
 import streamlit as st
 from dotenv import load_dotenv
+from observability import format_duration
 from orchestrator import app, AgentState, generate_leads, QUALIFIED_SCORE, crm_node
 from email_service import send_email
 
@@ -121,8 +122,52 @@ if st.button("🔎 Start Batch Sourcing", use_container_width=True):
     if not target_profile.strip():
         st.error("Please enter a target customer profile.")
     else:
-        with st.spinner("Finding companies..."):
-            companies = generate_leads(target_profile)
+        status = st.status("Starting discovery...", expanded=True)
+        bar = st.progress(0.0)
+        stats = st.empty()
+
+        def on_progress(evt):
+            stage = evt.get("stage")
+            message = evt.get("message", "")
+            elapsed = format_duration(evt.get("elapsed", 0.0))
+            found = evt.get("found", 0)
+            processed = evt.get("processed", 0)
+            total_cells = evt.get("total_cells")
+            cell_index = evt.get("cell_index")
+
+            if stage == "complete":
+                state = "complete"
+            elif stage == "error":
+                state = "error"
+            else:
+                state = "running"
+
+            status.update(label=message, state=state)
+
+            if total_cells:
+                bar.progress(min((cell_index or 0) / total_cells, 1.0))
+
+            parts = [
+                f"⏱ {elapsed}",
+                f"**{found}** companies found",
+                f"**{processed}** candidates processed",
+            ]
+            if total_cells and cell_index:
+                parts.append(f"cell **{cell_index}/{total_cells}**")
+            stats.markdown("  ·  ".join(parts))
+
+        try:
+            companies = generate_leads(target_profile, progress=on_progress)
+            status.update(
+                label=f"Discovery complete — {len(companies)} companies",
+                state="complete",
+            )
+        except Exception as e:
+            status.update(label=f"Discovery failed: {e}", state="error")
+            st.error(f"Discovery failed: {e}")
+            companies = []
+
+        bar.progress(1.0)
 
         if not companies:
             st.warning("No suitable companies were found.")
@@ -132,7 +177,8 @@ if st.button("🔎 Start Batch Sourcing", use_container_width=True):
 
             progress = st.progress(0)
 
-            for i, company in enumerate(companies):
+            for i, candidate in enumerate(companies):
+                company = candidate.company_name
                 thread_id = f"{slug(company)}_{uuid.uuid4().hex[:8]}"
 
                 initial_state: AgentState = {
@@ -148,6 +194,12 @@ if st.button("🔎 Start Batch Sourcing", use_container_width=True):
                     "approved": False,
                     "crm_page_id": "",
                     "final_status": "",
+                    "website": candidate.website or "",
+                    "country": candidate.country or "",
+                    "industry": candidate.industry or "",
+                    "commodity": candidate.commodity or "",
+                    "priority": candidate.priority or "",
+                    "confidence": candidate.confidence or "",
                 }
 
                 config = {"configurable": {"thread_id": thread_id}}
@@ -175,7 +227,8 @@ low_fit = []
 if st.session_state.batch_companies:
     st.subheader(f"Results ({len(st.session_state.batch_companies)})")
 
-    for company in st.session_state.batch_companies:
+    for candidate in st.session_state.batch_companies:
+        company = candidate.company_name
         thread_id = st.session_state.threads.get(company)
 
         if not thread_id:
@@ -224,6 +277,20 @@ if st.session_state.batch_companies:
         with st.container():
             st.markdown('<div class="lead-card">', unsafe_allow_html=True)
             st.subheader(company)
+
+            meta = []
+            if state.get("country"):
+                meta.append(state["country"])
+            if state.get("commodity"):
+                meta.append(state["commodity"].title())
+            if state.get("priority"):
+                meta.append(f"Priority {state['priority']}")
+            if state.get("confidence"):
+                meta.append(state["confidence"].title())
+            if state.get("website"):
+                meta.append(state["website"])
+            if meta:
+                st.caption(" · ".join(meta))
 
             col1, col2, col3 = st.columns(3)
 

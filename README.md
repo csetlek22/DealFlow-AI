@@ -15,15 +15,16 @@ a tailored first-touch email are all separate, tedious steps. DealFlow AI
 automates these steps as a pipeline of AI agents, while keeping a human in the
 loop for the final decision.
 
-The workflow is web-grounded: every company, contact, and signal is derived
-from live search results rather than the model's training data. This reduces
-hallucination by making the agents cite evidence they actually saw.
+The workflow is web-grounded: discovery enumerates candidate companies from the
+model's knowledge, then verifies each one against live search results before it
+is accepted, so no unverified company is reported as fact. Every contact and
+signal is likewise derived from evidence the agents actually saw.
 
 ## Key Features
 
-- **Company discovery** via the Tavily search API (with DuckDuckGo fallback).
+- **Company discovery** via LLM enumeration per commodity/country, verified by search (Tavily with DuckDuckGo fallback).
 - **Notion CRM duplicate filtering** so already-known companies are not proposed again.
-- **AI qualification** of discovered companies against the target profile using Google Gemini.
+- **AI qualification** of discovered companies against the target profile using DeepSeek.
 - **Multi-query company research** covering profile, news, hiring, leadership, and operations.
 - **Contact research** to identify a relevant decision maker from public sources.
 - **Hunter.io email enrichment** as an additional verified-email provider.
@@ -37,13 +38,13 @@ hallucination by making the agents cite evidence they actually saw.
 ## End-to-End Pipeline
 
 ```text
-Discovery
+Discovery (enumerate + verify)
    ↓
 Notion Duplicate Filtering
    ↓
-AI Qualification
-   ↓
 Company Research
+   ↓
+AI Qualification
    ↓
 Contact Research
    ↓
@@ -56,10 +57,10 @@ Human Approval
 Notion CRM / Email
 ```
 
-1. **Discovery** — The master agent runs web searches for the target profile and extracts a broad list of candidate companies.
-2. **Notion Duplicate Filtering** — The Notion CRM is queried first, and any candidate that matches an existing CRM company is excluded before qualification.
-3. **AI Qualification** — Gemini selects the 5–10 candidates that best match the target profile.
-4. **Company Research** — Each qualified company is researched with multiple queries (profile, news, hiring, leadership, operations).
+1. **Discovery** — The mapper enumerates real companies per commodity/country from the model's knowledge, then verifies each against a targeted web search before inclusion (dropping or marking unconfirmed matches).
+2. **Notion Duplicate Filtering** — The Notion CRM is queried first, and any candidate that matches an existing CRM company is excluded.
+3. **Company Research** — Each discovered company is researched with multiple queries (profile, news, hiring, leadership, operations).
+4. **AI Qualification** — DeepSeek scores each company against the target profile.
 5. **Contact Research** — A relevant decision maker is identified from public evidence.
 6. **Hunter Enrichment** — Hunter.io is queried for a verified email when a company domain is known.
 7. **AI Outreach Generation** — A personalized first-touch email is drafted.
@@ -74,7 +75,8 @@ machine.
 | Module | Responsibility |
 | --- | --- |
 | `src/app.py` | Streamlit UI: input, approval, CRM/email actions, rewrite. |
-| `src/orchestrator.py` | LangGraph pipeline, discovery/qualification, Notion dedup, CRM writes. |
+| `src/orchestrator.py` | LangGraph pipeline, Notion dedup, CRM writes, lead orchestration. |
+| `src/market_map.py` | Iterative market mapping: enumeration, verification, dedup, prioritization. |
 | `src/research.py` | Search providers (Tavily/DDGS), query building, result formatting. |
 | `src/hunter.py` | Hunter.io domain email enrichment. |
 | `src/prompts.py` | Prompt templates for each agent stage. |
@@ -83,16 +85,15 @@ machine.
 
 ```mermaid
 flowchart TD
-    A[Tavily Discovery] --> B[Notion Duplicate Filtering]
-    B --> C[Gemini Qualification]
-    C --> D[Researcher: Company Research]
-    D --> E[Analyst: Fit Scoring]
-    E -->|fit_score >= 6| F[Contact Researcher + Hunter Enrichment]
-    E -->|fit_score < 6| X[Rejected]
-    F --> G[Copywriter: Email Draft]
-    G --> H[Human Approval]
-    H -->|Approve| I[Notion CRM / Email]
-    H -->|Feedback| G
+    A[Enumerate + Verify] --> B[Notion Duplicate Filtering]
+    B --> C[Researcher: Company Research]
+    C --> D[Analyst: Fit Scoring]
+    D -->|fit_score >= 6| E[Contact Researcher + Hunter Enrichment]
+    D -->|fit_score < 6| X[Rejected]
+    E --> F[Copywriter: Email Draft]
+    F --> G[Human Approval]
+    G -->|Approve| H[Notion CRM / Email]
+    G -->|Feedback| F
 ```
 
 ## Qualification
@@ -124,23 +125,23 @@ DealFlow AI never acts on a lead automatically:
 
 ## Duplicate Prevention
 
-Before qualification, the app reads the Notion CRM and excludes companies that
-are already present:
+The app reads the Notion CRM and excludes companies that are already present,
+both during discovery and again as a final safety check:
 
-- **Name matching** — company names are normalized (lowercased, punctuation stripped, whitespace collapsed) and compared.
+- **Name matching** — company names are normalized (lowercased, punctuation stripped, whitespace collapsed) and compared exactly.
 - **Domain matching** — a candidate's website domain is compared against domains extracted from the CRM (from domain-shaped company names and stored contact emails).
 - **Pagination** — the CRM is read in pages so the full database is covered.
-- **Final safety check** — the qualified result is filtered again against the CRM list.
+- **Final safety check** — the discovered result is filtered again against the CRM list before it reaches the outreach workflow.
 
-If the Notion CRM cannot be queried, the batch is skipped (the app returns no
-results rather than proposing duplicate companies).
+If the Notion CRM cannot be queried, discovery proceeds without CRM dedup (the
+run continues rather than failing; existing companies may then re-surface).
 
 ## Technology Stack
 
 - Python 3.10+
 - Streamlit
 - LangGraph (`langgraph-checkpoint-sqlite`)
-- Google Gemini (`langchain-google-genai`)
+- DeepSeek (`langchain-openai`)
 - Tavily Search API
 - Notion API (`notion-client`)
 - Hunter.io
@@ -155,6 +156,7 @@ Lead-Getter/
 ├── src/
 │   ├── app.py
 │   ├── orchestrator.py
+│   ├── market_map.py
 │   ├── research.py
 │   ├── hunter.py
 │   ├── prompts.py
@@ -211,7 +213,7 @@ cp .env_example .env
 The following variables are required:
 
 ```env
-GOOGLE_API_KEY=your_key_here
+DEEPSEEK_API_KEY=your_key_here
 TAVILY_API_KEY=your_key_here
 HUNTER_API_KEY=your_key_here
 NOTION_TOKEN=your_token_here
@@ -222,7 +224,7 @@ sender_password=your_16_character_app_password
 
 | Variable | Purpose |
 | --- | --- |
-| `GOOGLE_API_KEY` | Gemini API key for reasoning, qualification, and drafting. |
+| `DEEPSEEK_API_KEY` | DeepSeek API key for reasoning, qualification, and drafting. |
 | `TAVILY_API_KEY` | Tavily search API key for web discovery and research. |
 | `HUNTER_API_KEY` | Hunter.io key for verified email enrichment (optional, degrades gracefully). |
 | `NOTION_TOKEN` | Notion integration token for reading and writing the CRM. |
@@ -266,7 +268,7 @@ required to run it.
 
 ## Limitations / Considerations
 
-- Requires valid Gemini, Tavily, and Notion credentials; Hunter and Gmail are needed for enrichment and sending.
+- Requires valid DeepSeek, Tavily, and Notion credentials; Hunter and Gmail are needed for enrichment and sending.
 - External API availability, quotas, and rate limits can affect throughput.
 - LLM output is non-deterministic and can vary between runs.
 - Search result quality influences discovery and qualification accuracy.

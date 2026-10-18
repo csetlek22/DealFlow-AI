@@ -21,6 +21,19 @@ NEW_BODY = "NEW BODY"
 THREAD_ID = "acme_12345678"
 
 
+def _candidate(name):
+    """Stand-in for a CompanyCandidate with the fields app.py reads."""
+    return types.SimpleNamespace(
+        company_name=name,
+        website=None,
+        country=None,
+        industry=None,
+        commodity=None,
+        priority=None,
+        confidence=None,
+    )
+
+
 class FakeGraphApp:
     """Minimal stand-in for the LangGraph-compiled app used by app.py."""
 
@@ -79,7 +92,7 @@ def main():
     orchestrator = types.ModuleType("orchestrator")
     orchestrator.app = FakeGraphApp()
     orchestrator.AgentState = dict
-    orchestrator.generate_leads = lambda profile: ["Acme Co"]
+    orchestrator.generate_leads = lambda profile: [_candidate("Acme Co")]
     orchestrator.QUALIFIED_SCORE = 6
 
     def fake_crm_node(state):
@@ -97,7 +110,7 @@ def main():
     at = AppTest.from_file(str(APP_PATH), default_timeout=60).run()
 
     # Seed the batch results so the render loop shows the company card.
-    at.session_state["batch_companies"] = ["Acme Co"]
+    at.session_state["batch_companies"] = [_candidate("Acme Co")]
     at.session_state["threads"] = {"Acme Co": THREAD_ID}
     at.run()
 

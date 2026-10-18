@@ -5,6 +5,10 @@ from urllib.parse import urlsplit, urlunsplit
 import requests
 from ddgs import DDGS
 
+from observability import get_logger
+
+logger = get_logger("research")
+
 TAVILY_ENDPOINT = "https://api.tavily.com/search"
 
 
@@ -60,7 +64,10 @@ def _tavily_search(query: str, max_results: int = 5) -> list[dict]:
         response.raise_for_status()
         data = response.json()
     except Exception as e:
-        print(f"Tavily search failed for '{query}': {e}")
+        logger.warning(
+            "Tavily search failed for '%s': %s: %s",
+            query, type(e).__name__, e,
+        )
         return []
 
     results = []
@@ -125,7 +132,10 @@ def _ddgs_search_queries(
                                 seen.add(key)
                                 results.append(result)
             except Exception as e:
-                print(f"Web search failed for '{query}': {e}")
+                logger.warning(
+                    "Web search failed for '%s': %s: %s",
+                    query, type(e).__name__, e,
+                )
 
             time.sleep(1)
 
@@ -142,7 +152,10 @@ def _ddgs_search_queries(
                                     seen.add(key)
                                     results.append(result)
                 except Exception as e:
-                    print(f"News search failed for '{query}': {e}")
+                    logger.warning(
+                        "News search failed for '%s': %s: %s",
+                        query, type(e).__name__, e,
+                    )
 
                 time.sleep(2)
 
@@ -177,44 +190,19 @@ def search_queries(
     )
 
 
-def _discovery_queries(profile: str) -> list[str]:
-    """Build focused discovery queries from the target profile."""
-    compact = " ".join(profile.split())
-    icp = compact
-
-    # If the profile opens with an "ideal customers are ..." lead-in, search
-    # only from that point onward so the query describes the target rather
-    # than the surrounding instructions.
-    lowered = compact.lower()
-    for marker in ("ideal customers are", "target companies", "companies that"):
-        idx = lowered.find(marker)
-        if idx != -1:
-            icp = compact[idx:]
-            break
-
-    base = icp if len(icp) <= 220 else icp[:220]
-
-    return [
-        base,
-        f"{base} companies",
-        f"{base} hiring OR expansion OR growth",
-    ]
-
-
-def search_target_companies(
-    target_profile: str,
-    max_results_per_query: int = 6,
+def search_company_verification(
+    name: str,
+    country: str | None = None,
+    max_results: int = 4,
 ) -> list[dict]:
-    """Find real candidate companies matching the target profile via web search."""
-    profile = target_profile.strip()
-    if not profile:
-        return []
-
-    queries = _discovery_queries(profile)
+    """Run a targeted search to verify a candidate company's existence."""
+    query = f"{name} official website"
+    if country:
+        query = f"{name} {country} official website"
 
     return search_queries(
-        queries,
-        max_results=max_results_per_query,
+        [query],
+        max_results=max_results,
         include_news=False,
     )
 
