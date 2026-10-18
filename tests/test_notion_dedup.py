@@ -2,16 +2,16 @@
 
 These tests verify the notion-client 3.x data-source read path, fail-safe
 behavior when the CRM is unreachable, and exclusion of companies already
-present in the CRM (including the final post-qualification safety check).
+present in the CRM (including the final post-discovery safety check).
 
 They are hermetic: no network access and no Streamlit import. They exercise the
-real ``orchestrator`` module with a fake Notion client and fake LLM/search
-functions.
+real ``orchestrator`` module with a fake Notion client and a fake discovery
+runner.
 """
 
 import io
+import logging
 import sys
-from contextlib import redirect_stdout
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -19,7 +19,7 @@ SRC = REPO / "src"
 sys.path.insert(0, str(SRC))
 
 import orchestrator as o
-from schemas import CompanyCandidate, CompanyCandidateList
+from schemas import CompanyCandidate
 
 
 def _page(company, email=None):
@@ -67,22 +67,6 @@ class FakeNotion:
         self.data_sources = FakeDataSources(batches)
 
 
-class FakeLLM:
-    """Returns the discovery list on first invoke, qualification list second."""
-
-    def __init__(self, discovery, qualification):
-        self.discovery = discovery
-        self.qualification = qualification
-        self.invokes = 0
-
-    def with_structured_output(self, schema):
-        return self
-
-    def invoke(self, prompt):
-        self.invokes += 1
-        return self.discovery if self.invokes == 1 else self.qualification
-
-
 def test_get_existing_crm_companies_uses_v3_data_sources():
     batches = [
         ([_page("Acme Corp"), _page("Globex", email="jane@globex.com")], True, "c2"),
@@ -105,93 +89,80 @@ def test_get_existing_crm_companies_uses_v3_data_sources():
 
 
 def test_generate_leads_fail_safe_on_notion_error():
-    original = o.get_existing_crm_companies
+    original = (o.get_existing_crm_companies, o.run_discovery)
 
     def boom():
         raise RuntimeError("Notion 401 Unauthorized")
 
     o.get_existing_crm_companies = boom
+    o.run_discovery = lambda *a, **k: []
 
-    buf = io.StringIO()
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    logger = logging.getLogger("dealflow")
+    logger.addHandler(handler)
 
     try:
-        with redirect_stdout(buf):
-            result = o.generate_leads("some profile")
+        result = o.generate_leads("some profile")
     finally:
-        o.get_existing_crm_companies = original
+        o.get_existing_crm_companies, o.run_discovery = original
+        logger.removeHandler(handler)
 
     assert result == [], result
-    log = buf.getvalue()
+    log = stream.getvalue()
     assert "Notion CRM lookup failed" in log, log
     assert "RuntimeError" in log, log
     assert "Notion 401 Unauthorized" in log, log
 
 
 def test_generate_leads_excludes_existing_and_returns_new():
-    original = (
-        o.get_existing_crm_companies,
-        o.search_target_companies,
-        o.format_search_results,
-        o.llm,
-    )
+    original = (o.get_existing_crm_companies, o.run_discovery)
 
     def fake_existing():
         return {"Acme Corp"}, {"globex.com"}
 
-    def fake_search(profile, max_results_per_query):
-        return [{"url": "https://example.com/1"}]
-
-    def fake_format(results, max_chars):
-        return "search context"
-
-    discovery = CompanyCandidateList(
-        candidates=[
+    def fake_discovery(llm, profile, **kwargs):
+        return [
             CompanyCandidate(company_name="Acme Corp"),
             CompanyCandidate(company_name="Globex Co", website="https://globex.com"),
             CompanyCandidate(company_name="Brand New Co"),
         ]
-    )
-
-    # The qualification step returns Acme Corp again, so the final safety
-    # check must still drop it.
-    qualification = CompanyCandidateList(
-        candidates=[
-            CompanyCandidate(company_name="Acme Corp"),
-            CompanyCandidate(company_name="Brand New Co"),
-        ]
-    )
 
     o.get_existing_crm_companies = fake_existing
-    o.search_target_companies = fake_search
-    o.format_search_results = fake_format
-    o.llm = FakeLLM(discovery, qualification)
+    o.run_discovery = fake_discovery
 
     try:
         result = o.generate_leads("some profile")
     finally:
-        (
-            o.get_existing_crm_companies,
-            o.search_target_companies,
-            o.format_search_results,
-            o.llm,
-        ) = original
+        o.get_existing_crm_companies, o.run_discovery = original
 
-    assert result == ["Brand New Co"], result
+    assert [c.company_name for c in result] == ["Brand New Co"], result
 
 
 def test_unrelated_companies_are_not_matched():
-    names = {"Motion"}
-    domains = set()
-    candidate = lambda name: CompanyCandidate(company_name=name)
+    # Exact (normalized) matching only: a partial name must not be treated as
+    # a duplicate of an existing CRM company.
+    original = (o.get_existing_crm_companies, o.run_discovery)
 
-    kept, excluded = o._filter_existing(
-        [candidate("Motion Industries"), candidate("Motion 2"), candidate("Motion")],
-        names,
-        domains,
-    )
+    def fake_existing():
+        return {"Motion"}, set()
 
-    assert [c.company_name for c in kept] == ["Motion Industries", "Motion 2"]
-    assert excluded == ["Motion"]
+    def fake_discovery(llm, profile, **kwargs):
+        return [
+            CompanyCandidate(company_name="Motion Industries"),
+            CompanyCandidate(company_name="Motion 2"),
+            CompanyCandidate(company_name="Motion"),
+        ]
+
+    o.get_existing_crm_companies = fake_existing
+    o.run_discovery = fake_discovery
+
+    try:
+        result = o.generate_leads("some profile")
+    finally:
+        o.get_existing_crm_companies, o.run_discovery = original
+
+    assert [c.company_name for c in result] == ["Motion Industries", "Motion 2"]
 
 
 def main():
