@@ -17,3 +17,4 @@ __pycache__/
 
 # Local tooling configuration
 .openclaude/
+discovery_cache.json

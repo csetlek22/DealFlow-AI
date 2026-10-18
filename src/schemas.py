@@ -4,18 +4,56 @@ from pydantic import BaseModel, Field
 
 
 class CompanyCandidate(BaseModel):
-    """A real company candidate extracted from web search results."""
+    """A company prospect discovered via market mapping."""
 
     company_name: str
     website: str | None = None
     evidence: str = ""
     source_url: str = ""
 
+    country: str | None = None
+    industry: str | None = None
+    commodity: str | None = None
+    activity: str | None = None
+    company_size: str | None = None
+    priority: str | None = None
+    confidence: str | None = None
+    linkedin_url: str | None = None
+    discovery_source: str | None = None
+
 
 class CompanyCandidateList(BaseModel):
-    """Candidate companies discovered via web search."""
+    """Candidate companies enumerated by the discovery LLM."""
 
     candidates: list[CompanyCandidate] = Field(
+        default_factory=list
+    )
+
+
+class CompanyVerification(BaseModel):
+    """Search-backed verification of a single enumerated candidate."""
+
+    company_name: str
+    is_relevant: bool = True
+    website: str | None = None
+    country: str | None = None
+    industry: str | None = None
+    activity: str | None = None
+    company_size: str | None = None
+    linkedin_url: str | None = None
+    confidence: Literal[
+        "confirmed",
+        "likely",
+        "potential",
+        "unverified",
+    ] = "unverified"
+    evidence: str = ""
+
+
+class CompanyVerificationList(BaseModel):
+    """Batched verification results."""
+
+    verifications: list[CompanyVerification] = Field(
         default_factory=list
     )
 

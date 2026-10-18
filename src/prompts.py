@@ -1,48 +1,3 @@
-DISCOVERY_PROMPT = """
-You are a senior B2B prospecting researcher.
-
-TARGET CUSTOMER PROFILE:
-{target_profile}
-
-WEB SEARCH RESULTS:
-{search_results}
-
-Extract a very BROAD list of REAL companies that appear in the WEB SEARCH RESULTS and plausibly match the TARGET CUSTOMER PROFILE.
-
-Requirements:
-- Only include companies that are actually present in the search results.
-- Do NOT invent companies or recall companies from your own knowledge.
-- Be inclusive: capture up to 25 distinct companies.
-- Prefer companies with an identifiable official website/domain in the results.
-- For each company provide:
-  - company_name: the exact company name.
-  - website: the official website/domain if visible in the results, otherwise null.
-  - evidence: a short supporting quote/description from the results.
-  - source_url: the URL where the company was found.
-- Exclude job boards (Indeed, LinkedIn, Glassdoor), software vendors, directories, and generic categories unless they explicitly match the profile.
-- If fewer than 50 companies qualify, return all of them.
-"""
-
-
-QUALIFICATION_PROMPT = """
-You are a senior B2B prospecting expert.
-
-TARGET CUSTOMER PROFILE:
-{target_profile}
-
-DISCOVERED CANDIDATES:
-{candidates}
-
-Select all companies that match the TARGET CUSTOMER PROFILE.
-
-Requirements:
-- Rank candidates by fit with the profile (industry, geography, size, activity).
-- Only select companies present in the DISCOVERED CANDIDATES; do NOT invent new companies.
-- Return at most 10 companies, or fewer if fewer qualify.
-- Preserve each selected company's company_name, website, evidence, and source_url exactly as provided.
-"""
-
-
 RESEARCHER_PROMPT = """
 You are a senior B2B company intelligence researcher.
 
@@ -216,4 +171,63 @@ If HUMAN FEEDBACK is provided:
 - Revise the existing draft according to the feedback.
 - Preserve factual accuracy.
 - Keep the email concise.
+"""
+
+
+ENUMERATION_PROMPT = """
+You are a senior B2B market-mapping researcher building a European prospect database.
+
+COMMODITY SEGMENT: {commodity}
+TARGET COUNTRY: {country}
+TARGET GEOGRAPHY (all countries in scope): {country_list}
+
+TARGET CUSTOMER PROFILE:
+{target_profile}
+
+Using your own knowledge of real, active European companies, list up to {max_companies}
+REAL companies that operate in the {commodity} segment with identifiable operations in
+{country} or another country in the target geography.
+
+Requirements:
+- Use your own knowledge. Do NOT restrict yourself to any external search results.
+- Only list companies you are confident actually exist.
+- Prefer importers, traders, processors, manufacturers, roasters, refiners and crushers
+  of this commodity, plus large multinationals with a relevant EU operating entity.
+- For each company provide:
+  - company_name: the exact legal or trading name.
+  - website: the official domain ONLY if you are confident it is correct; otherwise null.
+  - country: the EU country where the relevant operating entity is based.
+  - industry: a short industry label (e.g. "coffee roasting", "cocoa processing").
+  - commodity: the commodity group.
+  - activity: a one-line description of what the company does.
+  - company_size: size if known (e.g. "1,000+ employees", "50-250 employees"), else null.
+- Mark any field you do not know as null. NEVER invent a name, website or activity.
+"""
+
+
+VERIFICATION_PROMPT = """
+You are a B2B data verifier. For each candidate below, decide whether it is a real, active
+company relevant to the target profile's EUDR-regulated commodity segments, using ONLY the
+supplied search evidence.
+
+CANDIDATES:
+{candidates}
+
+For each candidate return a verification object with:
+- company_name: exactly as given.
+- is_relevant: true if the evidence shows a real company operating in a relevant commodity
+  segment; false otherwise.
+- website: the official domain confirmed by the evidence, else null.
+- country: the EU country of the relevant operating entity, else null.
+- industry: short industry label.
+- activity: one-line description of the company's operations.
+- company_size: size if visible in the evidence (e.g. "1,000+ employees"), else null.
+- linkedin_url: the LinkedIn company URL only if explicitly visible, else null.
+- confidence: "confirmed" (official site plus clear relevant activity), "likely"
+  (strong evidence), "potential" (weak or partial evidence), or "unverified"
+  (no usable evidence).
+- evidence: a short supporting quote from the search results.
+
+Do not invent any fact not present in the supplied evidence. When evidence is absent,
+set is_relevant false and confidence "unverified".
 """

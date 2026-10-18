@@ -2,33 +2,32 @@ import json
 import os
 import re
 import sqlite3
+import time
 from pathlib import Path
 from typing import TypedDict
 
 from dotenv import load_dotenv
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.sqlite import SqliteSaver
 from notion_client import Client
 
+from observability import emit, format_duration, get_logger
 from schemas import (
-    CompanyCandidateList,
     CompanyResearch,
     LeadAnalysis,
     ContactResearch,
     EmailDraft,
 )
 from research import (
-    search_target_companies,
     search_company,
     search_contact,
     format_search_results,
     get_source_urls,
 )
 from hunter import enrich_email, _extract_domain
+from market_map import run_discovery
 from prompts import (
-    DISCOVERY_PROMPT,
-    QUALIFICATION_PROMPT,
     RESEARCHER_PROMPT,
     ANALYST_PROMPT,
     CONTACT_RESEARCHER_PROMPT,
@@ -42,12 +41,14 @@ DB_FILE = BASE_DIR / "state.db"
 
 load_dotenv(ENV_FILE)
 
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 NOTION_DATABASE_ID = os.getenv("NOTION_DATABASE_ID")
 
-if not GOOGLE_API_KEY:
-    raise ValueError("GOOGLE_API_KEY is missing.")
+if not DEEPSEEK_API_KEY:
+    raise ValueError("DEEPSEEK_API_KEY is missing.")
 
 if not NOTION_TOKEN:
     raise ValueError("NOTION_TOKEN is missing.")
@@ -56,17 +57,20 @@ if not NOTION_DATABASE_ID:
     raise ValueError("NOTION_DATABASE_ID is missing.")
 
 
-llm = ChatGoogleGenerativeAI(
-    model="gemini-3.1-flash-lite",
+llm = ChatOpenAI(
+    model=DEEPSEEK_MODEL,
     temperature=0,
-    google_api_key=GOOGLE_API_KEY,
+    api_key=DEEPSEEK_API_KEY,
+    base_url=DEEPSEEK_BASE_URL,
 )
 
 notion = Client(auth=NOTION_TOKEN)
 
+logger = get_logger("orchestrator")
+
 # Companies with a fit_score at or above this value are considered qualified.
 QUALIFIED_SCORE = 6
-MAX_COMPANIES = 12
+MAX_COMPANIES = int(os.getenv("DISCOVERY_LIMIT", "500"))
 
 DEFAULT_PROFILE = """
 B2B operational consulting.
@@ -92,6 +96,12 @@ class AgentState(TypedDict, total=False):
     approved: bool
     crm_page_id: str
     final_status: str
+    website: str
+    country: str
+    industry: str
+    commodity: str
+    priority: str
+    confidence: str
 
 
 def _json(data):
@@ -101,46 +111,6 @@ def _json(data):
         ensure_ascii=False,
         indent=2,
     )
-
-
-def _clean_companies(companies):
-    """Remove duplicate or empty company names."""
-    seen = set()
-    result = []
-
-    for company in companies or []:
-        company = company.strip() if company else ""
-
-        if not company:
-            continue
-
-        key = company.lower()
-
-        if key not in seen:
-            seen.add(key)
-            result.append(company)
-
-    return result[:MAX_COMPANIES]
-
-
-def _clean_candidates(candidates, limit=25):
-    """Deduplicate candidate companies by name."""
-    seen = set()
-    result = []
-
-    for candidate in candidates or []:
-        name = (candidate.company_name or "").strip()
-
-        if not name:
-            continue
-
-        key = name.lower()
-
-        if key not in seen:
-            seen.add(key)
-            result.append(candidate)
-
-    return result[:limit]
 
 
 def _normalize_company_name(value):
@@ -232,149 +202,64 @@ def get_existing_crm_companies():
     return names, domains
 
 
-def _filter_existing(candidates, existing_names, existing_domains):
-    """Split candidates into new (kept) and already-in-CRM (excluded).
+def generate_leads(target_profile, progress=None):
+    """Discover and verify EUDR-relevant prospects via iterative market mapping.
 
-    An exact normalized name match is the primary duplicate signal; a domain
-    match is a secondary check that catches renames and alternate spellings.
+    ``progress`` is an optional ``Callable[[dict], None]`` receiving structured
+    stage events for real-time UI updates (see ``observability.emit``).
     """
-    existing = {
-        _normalize_company_name(name)
-        for name in existing_names
-    }
-
-    kept = []
-    excluded = []
-
-    for candidate in candidates:
-        name_key = _normalize_company_name(candidate.company_name)
-        domain = _extract_domain(candidate.website) if candidate.website else ""
-
-        if (
-            (name_key and name_key in existing)
-            or (domain and domain in existing_domains)
-        ):
-            excluded.append(candidate.company_name)
-        else:
-            kept.append(candidate)
-
-    return kept, excluded
-
-
-def generate_leads(target_profile):
-    """Discover candidates via Tavily, filter out CRM duplicates, then qualify."""
+    start = time.time()
     profile = target_profile.strip() or DEFAULT_PROFILE
 
-    # Load existing CRM companies once. If we can't read them, fail safe (skip
-    # the batch) so we never risk surfacing a company already in the CRM.
     try:
         existing_names, existing_domains = get_existing_crm_companies()
     except Exception as e:
-        print(
-            f"Notion CRM lookup failed: {type(e).__name__}: {e} — "
-            "skipping batch (fail-safe)."
+        logger.warning(
+            "Notion CRM lookup failed: %s: %s — proceeding without CRM dedup.",
+            type(e).__name__, e,
         )
-        return []
+        existing_names, existing_domains = set(), set()
 
-    existing_set = {
-        _normalize_company_name(name)
-        for name in existing_names
-    }
+    logger.info("Existing CRM companies loaded: %d", len(existing_names))
+    emit(
+        progress, start, "crm",
+        f"Loaded {len(existing_names)} existing CRM companies",
+        found=0, processed=0,
+    )
 
-    print(f"Existing CRM companies loaded: {len(existing_names)}")
-
-    print("Master Agent: Discovering candidate companies via Tavily...")
-
-    results = search_target_companies(
+    prospects = run_discovery(
+        llm,
         profile,
-        max_results_per_query=8,
+        limit=MAX_COMPANIES,
+        existing_names=existing_names,
+        existing_domains=existing_domains,
+        progress=progress,
     )
 
-    context = format_search_results(
-        results,
-        max_chars=40000,
+    # Belt-and-suspenders: never return a company already in the CRM.
+    existing_set = {_normalize_company_name(name) for name in existing_names}
+    companies = []
+    for prospect in prospects:
+        name_key = _normalize_company_name(prospect.company_name)
+        domain = _extract_domain(prospect.website) if prospect.website else ""
+
+        if (
+            (name_key and name_key in existing_set)
+            or (domain and domain in existing_domains)
+        ):
+            continue
+
+        companies.append(prospect)
+
+    logger.info(
+        "Qualified companies: %d (discovery took %s)",
+        len(companies), format_duration(time.time() - start),
     )
-
-    if not context.strip():
-        print("Master Agent: no search results found.")
-        return []
-
-    try:
-        discovered = llm.with_structured_output(
-            CompanyCandidateList
-        ).invoke(
-            DISCOVERY_PROMPT.format(
-                target_profile=profile,
-                search_results=context,
-            )
-        )
-
-        candidates = _clean_candidates(
-            discovered.candidates,
-            limit=25,
-        )
-
-    except Exception as e:
-        print(f"Discovery error: {e}")
-        return []
-
-    print(f"Discovery candidates: {len(candidates)}")
-
-    if not candidates:
-        print("Master Agent: no candidates discovered.")
-        return []
-
-    candidates, excluded = _filter_existing(
-        candidates,
-        existing_names,
-        existing_domains,
+    emit(
+        progress, start, "complete",
+        f"Qualified {len(companies)} companies",
+        found=len(companies), processed=len(prospects),
     )
-
-    if excluded:
-        preview = ", ".join(excluded[:5])
-        suffix = "..." if len(excluded) > 5 else ""
-        print(f"Excluded as existing ({len(excluded)}): {preview}{suffix}")
-
-    if not candidates:
-        print("Master Agent: all candidates already exist in CRM.")
-        return []
-
-    print(f"Candidates sent to Gemini: {len(candidates)}")
-
-    try:
-        qualified = llm.with_structured_output(
-            CompanyCandidateList
-        ).invoke(
-            QUALIFICATION_PROMPT.format(
-                target_profile=profile,
-                candidates=_json(
-                    [candidate.model_dump() for candidate in candidates]
-                ),
-            )
-        )
-
-        companies = [
-            candidate.company_name
-            for candidate in qualified.candidates
-        ]
-
-    except Exception as e:
-        print(f"Qualification error: {e}")
-        companies = [
-            candidate.company_name
-            for candidate in candidates[:10]
-        ]
-
-    companies = _clean_companies(companies)
-
-    # Final safety check: never return a company already in the CRM.
-    companies = [
-        company
-        for company in companies
-        if _normalize_company_name(company) not in existing_set
-    ]
-
-    print(f"Qualified companies: {len(companies)}")
     return companies
 
 
@@ -398,7 +283,8 @@ def researcher_node(state):
 
     try:
         research = llm.with_structured_output(
-            CompanyResearch
+            CompanyResearch,
+            method="function_calling",
         ).invoke(
             RESEARCHER_PROMPT.format(
                 company=company,
@@ -432,7 +318,8 @@ def analyst_node(state):
 
     try:
         result = llm.with_structured_output(
-            LeadAnalysis
+            LeadAnalysis,
+            method="function_calling",
         ).invoke(
             ANALYST_PROMPT.format(
                 company=company,
@@ -505,7 +392,8 @@ def contact_researcher_node(state):
 
     try:
         result = llm.with_structured_output(
-            ContactResearch
+            ContactResearch,
+            method="function_calling",
         ).invoke(
             CONTACT_RESEARCHER_PROMPT.format(
                 company=company,
@@ -574,7 +462,8 @@ def copywriter_node(state):
 
     try:
         result = llm.with_structured_output(
-            EmailDraft
+            EmailDraft,
+            method="function_calling",
         ).invoke(
             COPYWRITER_PROMPT.format(
                 company=state["target_company"],
